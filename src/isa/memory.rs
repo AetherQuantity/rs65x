@@ -234,18 +234,6 @@ pub enum MemLoc {
     Const(u16),
 }
 
-#[derive(Clone, Copy, PartialEq)]
-pub enum WrapMode {
-    /// Always takes one cycle, wraps around the low byte, does not affect high byte
-    EightBitWrap,
-    /// Takes one or two cycles, one if addr+offset is on the same page, two if not
-    ExtraCycleOnPageCross,
-    /// Takes two cycles, reads the possibly invalid or possibly valid addr, then does it again on valid
-    ExtraCycleAlways,
-    /// Always takes one cycle, 16-bit
-    JustDo,
-}
-
 // useful const fn's to wrap common uop patterns
 impl Uop {
     const fn fetch_into(dest: Latch) -> Self {
@@ -271,10 +259,9 @@ impl Uop {
         }
     }
     const fn read_ptr8_hi() -> Self {
-        Uop::ReadNext {
-            src: MemLoc::Ptr,
+        Uop::Read {
+            src: MemLoc::PtrPlusOne,
             dest: Latch::EaHi,
-            wrap_mode: WrapMode::JustDo,
         }
     }
     const fn read_dp_then_offset(latch: Latch, offset_type: OffsetType) -> Self {

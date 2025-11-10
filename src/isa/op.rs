@@ -24,13 +24,6 @@ pub enum Uop {
         src: super::memory::MemLoc,
         dest: super::memory::Latch,
     },
-    /// Reads a value from the next byte after a memory location into a latch.
-    /// takes WrapMode into account
-    ReadNext {
-        src: super::memory::MemLoc,
-        dest: super::memory::Latch,
-        wrap_mode: super::memory::WrapMode,
-    },
     /// Push the data from a latch to the memory location denoted by Stack Pointer. If dec,
     /// decrement the Stack Pointer.
     Push {
@@ -233,18 +226,6 @@ impl MicroExecutor {
                 ctx.tick(wait);
                 StepResult::Pending
             }
-            Uop::ReadNext {
-                src,
-                dest,
-                wrap_mode,
-            } => {
-                let (addr, vda, vpa) = self.resolve_memloc_next(ctx, src, wrap_mode);
-                let (data, wait) = bus.read(addr, vda, vpa);
-                self.data_latch = data;
-                self.write_latch(ctx, dest, data);
-                ctx.tick(wait);
-                StepResult::Pending
-            }
             Uop::Push { src, dec } => {
                 let value = self.read_latch(ctx, src);
                 let addr = (ctx.stack_base() as u32) | (ctx.sp() as u32);
@@ -401,34 +382,6 @@ impl MicroExecutor {
                 (addr, true, false)
             }
             MemLoc::Const(loc) => (loc as u32, true, false),
-        }
-    }
-
-    fn resolve_memloc_next<C: MicroContext>(
-        &mut self,
-        ctx: &mut C,
-        loc: super::memory::MemLoc,
-        wrap_mode: super::memory::WrapMode,
-    ) -> (u32, bool, bool) {
-        match loc {
-            super::memory::MemLoc::Ptr => {
-                let base = ctx.direct_page_base();
-                let next = match wrap_mode {
-                    super::memory::WrapMode::EightBitWrap => {
-                        let low = (self.ptr as u8).wrapping_add(1);
-                        base.wrapping_add(low as u16)
-                    }
-                    super::memory::WrapMode::JustDo => {
-                        let ptr = self.ptr.wrapping_add(1);
-                        base.wrapping_add(ptr)
-                    }
-                    _ => {
-                        unreachable!("do we do multi cycle offsets with Ptr?")
-                    }
-                };
-                (next as u32, true, false)
-            }
-            _ => self.resolve_memloc(ctx, loc),
         }
     }
 
