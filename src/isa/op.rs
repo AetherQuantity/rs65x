@@ -367,14 +367,17 @@ impl MicroExecutor {
                 let bank = (ctx.data_bank() as u32) << 16;
                 (bank | (self.ea as u32 & 0xFFFF), true, false)
             }
-            MemLoc::Ptr => {
+            MemLoc::Ptr8 => {
                 let base = ctx.direct_page_base();
                 let addr = base.wrapping_add((self.ptr & 0x00FF) as u16);
                 (addr as u32, true, false)
             }
-            MemLoc::PtrPlusOne => {
+            MemLoc::Ptr8Inc => {
                 let base = ctx.direct_page_base();
-                let addr = base.wrapping_add((self.ptr.wrapping_add(1) & 0x00FF) as u16);
+                let low = (self.ptr & 0x00FF) as u8;
+                let addr = base.wrapping_add(low as u16);
+                // for Ptr8 we just wrap around the low byte
+                self.ptr = (self.ptr & 0xFF00) | (low.wrapping_add(1) as u16);
                 (addr as u32, true, false)
             }
             MemLoc::Sp => {

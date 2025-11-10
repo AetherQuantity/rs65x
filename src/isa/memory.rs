@@ -228,8 +228,8 @@ pub enum MemLoc {
     Pc,
     PcInc, // i.e. PC++
     Ea,
-    Ptr,
-    PtrPlusOne,
+    Ptr8,
+    Ptr8Inc,
     Sp,
     Const(u16),
 }
@@ -254,13 +254,13 @@ impl Uop {
     }
     const fn read_ptr8_low() -> Self {
         Uop::Read {
-            src: MemLoc::Ptr,
+            src: MemLoc::Ptr8Inc,
             dest: Latch::EaLo,
         }
     }
     const fn read_ptr8_hi() -> Self {
         Uop::Read {
-            src: MemLoc::PtrPlusOne,
+            src: MemLoc::Ptr8,
             dest: Latch::EaHi,
         }
     }
@@ -377,15 +377,7 @@ impl AddressMode {
                         queue.push(Uop::Finished);
                     }
                     JumpType::JmpIndirect | JumpType::JmpIndirectX => {
-                        queue.push(Uop::fetch_into(PtrLo));
-                        queue.push(Uop::fetch_into(PtrHi));
-                        // the Ptr contains the PC to jump to
-                        if jump_type == JumpType::JmpIndirectX {
-                            todo!("how does JmpIndirectX work?");
-                        }
-                        queue.push(Uop::read_ptr8_low());
-                        queue.push(Uop::read_ptr8_hi());
-                        queue.push(Uop::Finished);
+                        todo!("JmpIndirect requires absolute pointer support");
                     }
                     JumpType::ToSubroutine => {
                         // this is very similar to JmpAbsolute, with stuff in the middle
