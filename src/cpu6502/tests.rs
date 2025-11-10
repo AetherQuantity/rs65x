@@ -129,6 +129,7 @@ struct InstructionTrace {
 impl InstructionTrace {
     fn assert_accesses(&self, expected: Vec<Access>) {
         let mut cycle = 0;
+        let expected_cycles = expected.len() as u64;
         for mut e in expected {
             e.cycle = cycle;
             assert_eq!(
@@ -137,6 +138,11 @@ impl InstructionTrace {
             );
             cycle += 1;
         }
+        assert!(
+            expected_cycles == self.cycles,
+            "All expected cycles matched, but {} extra cycles found.",
+            self.cycles - expected_cycles
+        );
     }
 
     fn assert_prefetch(&self, expected: Access) {
