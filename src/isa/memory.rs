@@ -49,7 +49,7 @@ pub mod address_mode_subtypes {
 }
 use core::fmt;
 
-use address_mode_subtypes::*;
+pub use address_mode_subtypes::*;
 
 use crate::isa::op::{Uop, UopQueue};
 
@@ -231,12 +231,19 @@ pub enum MemLoc {
     Ptr,
     PtrPlusOne,
     Sp,
+    Const(u16),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum WrapMode {
-    DirectPage,
-    Absolute,
+    /// Always takes one cycle, wraps around the low byte, does not affect high byte
+    EightBitWrap,
+    /// Takes one or two cycles, one if addr+offset is on the same page, two if not
+    ExtraCycleOnPageCross,
+    /// Takes two cycles, reads the possibly invalid or possibly valid addr, then does it again on valid
+    ExtraCycleAlways,
+    /// Always takes one cycle, 16-bit
+    JustDo,
 }
 
 // useful const fn's to wrap common uop patterns
@@ -257,20 +264,6 @@ impl Uop {
             dest,
         }
     }
-    const fn offset_ea(offset_type: OffsetType, wrap_mode: WrapMode) -> Self {
-        Uop::AddOffset {
-            latch: Latch::Ea,
-            offset_type,
-            wrap_mode,
-        }
-    }
-    const fn offset_ptr8(offset_type: OffsetType, wrap_mode: WrapMode) -> Self {
-        Uop::AddOffset {
-            latch: Latch::Op0,
-            offset_type,
-            wrap_mode,
-        }
-    }
     const fn read_ptr8_low() -> Self {
         Uop::Read {
             src: MemLoc::Ptr,
@@ -281,8 +274,17 @@ impl Uop {
         Uop::ReadNext {
             src: MemLoc::Ptr,
             dest: Latch::EaHi,
-            wrap_mode: WrapMode::DirectPage,
+            wrap_mode: WrapMode::JustDo,
         }
+    }
+    const fn read_dp_then_offset(latch: Latch, offset_type: OffsetType) -> Self {
+        Uop::AddOffset8 {
+            latch: latch,
+            offset_type,
+        }
+    }
+    const fn read_or_fix(offset_type: OffsetType, memory_action: MemoryAction) -> Self {
+        Uop::ReadOrFix(offset_type, memory_action)
     }
     const fn push(src: Latch, dec: bool) -> Self {
         Uop::Push { src, dec }
@@ -309,14 +311,9 @@ impl Uop {
 impl AddressMode {
     pub fn emit_uops(&self, queue: &mut UopQueue, action: MemoryAction) {
         use Latch::*;
-        use WrapMode::*;
         match *self {
             AddressMode::NoMemory(no_mem_type) => {
                 // only READS. immediate value read into Op0
-                debug_assert!(
-                    action == MemoryAction::Read,
-                    "NoMemory writes or RMWs are meaningless"
-                );
                 match no_mem_type {
                     NoMemType::Implied => queue.push(Uop::fetch_into(None)),
                     NoMemType::Immediate => queue.push(Uop::fetch_into(Op0)),
@@ -331,24 +328,26 @@ impl AddressMode {
                 if offset_type != OffsetType::None {
                     // need an extra cycle to add offset
                     // also reads from pre-offset EA
-                    queue.push(Uop::offset_ea(offset_type, DirectPage));
+                    queue.push(Uop::read_dp_then_offset(Ea, offset_type));
                 }
-                // at this point, EA is valid
+                // now, we read from the correct address (either fetched EaLow or offsetted one from last cycle)
                 Uop::finish_action(queue, action);
             }
             AddressMode::Absolute(offset_type) => {
                 queue.push(Uop::fetch_into(EaLo));
                 queue.push(Uop::fetch_into(EaHi));
                 if offset_type != OffsetType::None {
-                    // wrapping with absolute may mangle the queue by adding a "fix" uop
-                    // this either counts as zero uops (the next is executed immediately), or
-                    // one uop, where we fix the high byte of EA. either way, after this uop
-                    // EA is guaranteed valid whether or not the fix was necessary
-                    queue.push(Uop::offset_ea(offset_type, Absolute));
+                    // we have a 16-bit address in EA. technically, last cycle when we fetched the high byte,
+                    // we could have added the offset to EaLo on that cycle. If that results in a valid address
+                    // (i.e., no overflow), and the action is read, that's the end of the whole instruction--next
+                    // cycle is opcode fetch. if it's write or read-modify-write, this cycle is a read from EA
+                    // regardless of its validity
+                    queue.push(Uop::read_or_fix(offset_type, action));
+                    // if read action from valid, queue is cleared and opcode fetch hapens next cycle. therefore we dont
+                    // care about the uops added by finish_action, they will be skipped
+                    // if read action from invalid, or nonread, this cycle fixes, and finish_action uops will execute
                 }
-                // then, the read as the first cycle of finish_action for R and RMW either reads
-                // on the same cycle as offset_ea confirmed no fix was necessary, or reads after
-                // offset_ea dummy read the wrong address
+                // these finish_action uops only execute if reading from overflow fixed addr, or nonread
                 Uop::finish_action(queue, action);
             }
             AddressMode::DpIndirect(offset_type) => {
@@ -356,16 +355,16 @@ impl AddressMode {
                 let y = offset_type == OffsetType::Y;
                 queue.push(Uop::fetch_into(Ptr));
                 if x {
-                    // always one cycle because low byte can overflow without any effect on high
-                    queue.push(Uop::offset_ptr8(offset_type, DirectPage));
+                    // always one cycle because DP overflows through u8, no need to fix high byte
+                    queue.push(Uop::read_dp_then_offset(Ptr, offset_type));
                 }
-                queue.push(Uop::read_ptr8_low()); // read from address in Op0 into EaLow
-                queue.push(Uop::read_ptr8_hi()); // read from address in Op0+1 (with ZP wraparound) into EaHigh
+                queue.push(Uop::read_ptr8_low()); // read from address in Ptr into EaLow
+                queue.push(Uop::read_ptr8_hi()); // read from address in Ptr+1 (with DP wraparound) into EaHigh
                 if y {
-                    // 1 or 2 cycles depending on if we need to fix the high byte on low overflow
-                    queue.push(Uop::offset_ea(offset_type, Absolute));
+                    // see above (Absolute indexed) for rationale regarding cycle counts here
+                    queue.push(Uop::read_or_fix(offset_type, action));
                 }
-                queue.push(Uop::read_into(Op0));
+                Uop::finish_action(queue, action);
             }
             AddressMode::Stack => {
                 debug_assert!(
@@ -428,8 +427,14 @@ impl AddressMode {
                         queue.push(Uop::push(PcHi, true));
                         queue.push(Uop::push(PcLo, true));
                         queue.push(Uop::push(Status, true));
-                        queue.push(Uop::IntFFFE); // read 0xFFFE directly into PC low
-                        queue.push(Uop::IntFFFF); // read 0xFFFF directly into PC high
+                        queue.push(Uop::Read {
+                            src: MemLoc::Const(0xFFFE),
+                            dest: PcLo,
+                        }); // read 0xFFFE directly into PC low
+                        queue.push(Uop::Read {
+                            src: MemLoc::Const(0xFFFF),
+                            dest: PcHi,
+                        }); // read 0xFFFF directly into PC high
                         queue.push(Uop::Finished);
                     }
                     JumpType::FromInterrupt => {
@@ -461,13 +466,13 @@ impl AddressMode {
                     todo!("16 bit opcodes")
                 }
             },
-            AddressMode::AbsoluteLong(offset_type) => {
+            AddressMode::AbsoluteLong(_) => {
                 todo!("16 bit instructions not implemented yet")
             }
             AddressMode::BlockMove => {
                 todo!("16 bit instructions not implemented yet")
             }
-            AddressMode::StackRelative(offset_type) => {
+            AddressMode::StackRelative(_) => {
                 todo!("16 bit instructions not implemented yet")
             }
         }

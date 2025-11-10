@@ -32,7 +32,7 @@ pub trait Flavor {
     const JMP_INDIRECT_WRAP_BUG: bool;
 
     /// Whether classic NMOS‑style dummy writes occur during RMW sequences on zero page/abs.
-    /// apparently according to Rockwell documentation CMOS chips replace the dummy write with a read instead
+    /// Aapparently according to Rockwell documentation CMOS chips replace the dummy write with a read instead
     const RMW_DUMMY_WRITE: bool;
 
     /// Additional opcodes present in CMOS 65C02 and/or WDC variants.
