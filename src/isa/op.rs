@@ -237,14 +237,14 @@ impl MicroExecutor {
                 StepResult::Pending
             }
             Uop::Pull { dest, inc } => {
-                if inc {
-                    ctx.set_sp(ctx.sp().wrapping_add(1));
-                }
                 let addr = (ctx.stack_base() as u32) | (ctx.sp() as u32);
                 let (data, wait) = bus.read(addr, true, false);
                 self.data_latch = data;
                 self.write_latch(ctx, dest, data);
                 ctx.tick(wait);
+                if inc {
+                    ctx.set_sp(ctx.sp().wrapping_add(1));
+                }
                 StepResult::Pending
             }
             Uop::AddOffset8 { latch, offset_type } => {

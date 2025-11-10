@@ -57,7 +57,7 @@ impl Harness {
 
 impl Bus for Harness {
     fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> (u8, WaitStates) {
-        println!("read access at {addr:X}");
+        //println!("read access at {addr:X}");
         let access_type = AccessType::Read;
         let addr16 = addr as u16;
         let data = self.mem[addr16 as usize];
@@ -217,15 +217,15 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn lda_immediate() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xA9, 0x42, 0xEA]);
+    fn ldy_immediate() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xA0, 0x42, 0xEA]); // LDY #$42; NOP
         let trace = run_instruction(&mut cpu, &mut bus);
-        assert_eq!(trace.cycles, 2, "LDA # should be 2 cycles");
-        assert_eq!(cpu.a, 0x42);
+        assert_eq!(trace.cycles, 2, "LDY # should be 2 cycles");
+        assert_eq!(cpu.y, 0x42);
         assert_eq!(cpu.p & (psr::Z | psr::N), 0); // result != 0, positive
 
         let accesses = vec![
-            Access::basic_read(0x8000, 0xA9),
+            Access::basic_read(0x8000, 0xA0),
             Access::basic_read(0x8001, 0x42),
         ];
         let prefetch = Access::basic_read(0x8002, 0xEA);
@@ -309,27 +309,26 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn eor_indirect_x_zp_wrap() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x41, 0x62, 0xEA]); // EOR ($62, X); NOP
+    fn ora_indirect_x_zp_wrap() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x01, 0x62, 0xEA]); // ORA ($62, X); NOP
         bus.mem[0x62] = 0xFF; // not the byte we are addressing
         bus.mem[0x60] = 0xEF; // low byte
         bus.mem[0x61] = 0xBE; // high byte
-        bus.mem[0xBEEF] = 0x42; // final byte we want
+        bus.mem[0xBEEF] = 0x0F; // final byte we want
         cpu.x = 0xFE; // add 0xFE to 0x62, wrap around to 0x60
         cpu.a = 0x42; // when EOR'd to 0x42, produces 0x00
         let trace = run_instruction(&mut cpu, &mut bus);
-        assert_eq!(trace.cycles, 6, "EOR IND,X should take 6 cycles");
-        //assert_eq!(cpu.a, 0);
-        //assert_eq!(cpu.p & psr::N, 0); // zero is not negative
-        //assert_eq!(cpu.p & psr::Z, psr::Z); // zero is, weirdly, zero
+        assert_eq!(trace.cycles, 6, "ORA IND,X should take 6 cycles");
+        assert_eq!(cpu.a, 0x4F);
+        assert_eq!(cpu.p & (psr::N | psr::Z), 0);
 
         let accesses = vec![
-            Access::basic_read(0x8000, 0x41),
+            Access::basic_read(0x8000, 0x01),
             Access::basic_read(0x8001, 0x62),
             Access::basic_read(0x0062, 0xFF), // dummy read at pre-offset address
             Access::basic_read(0x0060, 0xEF),
             Access::basic_read(0x0061, 0xBE),
-            Access::basic_read(0xBEEF, 0x42),
+            Access::basic_read(0xBEEF, 0x0F),
         ];
         let prefetch = Access::basic_read(0x8002, 0xEA);
 
@@ -465,6 +464,50 @@ mod mem_cycle_accuracy {
             Access::basic_read(0xBEEF, 0x26),
         ];
         let prefetch = Access::basic_read(0x8003, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn pla() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x68, 0xEA]); // PHA; NOP
+        cpu.s = 0xFE;
+        bus.mem[0x01FE] = 0x65;
+        bus.mem[0x01FF] = 0x78;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 4, "PLA should take 4 cycles");
+        assert_eq!(cpu.s, 0xFF);
+        assert_eq!(cpu.a, 0x78);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x68),
+            Access::basic_read(0x8001, 0xEA),
+            Access::basic_read(0x01FE, 0x65),
+            Access::basic_read(0x01FF, 0x78),
+        ];
+        let prefetch = Access::basic_read(0x8001, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn pha() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x48, 0xEA]); // PHA; NOP
+        cpu.s = 0xFF;
+        cpu.a = 0x78;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 3, "PHA should take 3 cycles");
+        assert_eq!(cpu.s, 0xFE);
+        assert_eq!(bus.mem[0x01FF], 0x78);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x48),
+            Access::basic_read(0x8001, 0xEA),
+            Access::basic_write(0x01FF, 0x78),
+        ];
+        let prefetch = Access::basic_read(0x8001, 0xEA);
 
         trace.assert_accesses(accesses);
         trace.assert_prefetch(prefetch);

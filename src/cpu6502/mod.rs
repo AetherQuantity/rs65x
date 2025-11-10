@@ -140,6 +140,12 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 self.alu_set_zn(result);
                 self.alu_set_flag(psr::C, byte >= read);
             }
+            Pla | Plx | Ply => match op {
+                Pla => self.a = read,
+                Plx => self.x = read,
+                Ply => self.y = read,
+                _ => unreachable!(),
+            },
             Bit => todo!(),
             _ => {}
         }
