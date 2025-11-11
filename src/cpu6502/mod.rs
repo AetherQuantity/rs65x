@@ -182,7 +182,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 y: &mut self.y,
                 cycles: &mut self.cycles,
                 instruction,
-                _opcode: self.current_opcode,
+                opcode: self.current_opcode,
                 _marker: PhantomData,
             };
             self.scratch.execute_next(&mut ctx, bus, &mut self.uops)
@@ -342,7 +342,7 @@ struct MicroCtx6502<'a, F: Flavor, B: Bus> {
     y: &'a mut u8,
     cycles: &'a mut u64,
     instruction: Instruction,
-    _opcode: u8,
+    opcode: u8,
     _marker: PhantomData<(F, B)>,
 }
 
@@ -353,59 +353,36 @@ impl<'a, F: Flavor, B: Bus> MicroCtx6502<'a, F, B> {
     }
 
     #[inline(always)]
-    fn bit_index_rmb(mnemonic: Mnemonic) -> Option<u8> {
-        use Mnemonic::*;
-        match mnemonic {
-            Rmb0 => Some(0),
-            Rmb1 => Some(1),
-            Rmb2 => Some(2),
-            Rmb3 => Some(3),
-            Rmb4 => Some(4),
-            Rmb5 => Some(5),
-            Rmb6 => Some(6),
-            Rmb7 => Some(7),
-            _ => None,
+    fn bit_index_rmb(op: u8) -> Option<u8> {
+        let low = op & 0x0F;
+        if low == 7 {
+            let high = op >> 4;
+            if high < 8 {
+                return Some(high);
+            }
         }
+        None
     }
 
     #[inline(always)]
-    fn bit_index_smb(mnemonic: Mnemonic) -> Option<u8> {
-        use Mnemonic::*;
-        match mnemonic {
-            Smb0 => Some(0),
-            Smb1 => Some(1),
-            Smb2 => Some(2),
-            Smb3 => Some(3),
-            Smb4 => Some(4),
-            Smb5 => Some(5),
-            Smb6 => Some(6),
-            Smb7 => Some(7),
-            _ => None,
+    fn bit_index_smb(op: u8) -> Option<u8> {
+        let low = op & 0x0F;
+        if low == 7 {
+            let high = op >> 4;
+            if high > 7 {
+                return Some(high - 8);
+            }
         }
+        None
     }
 
     #[inline(always)]
-    fn branch_bit_info(mnemonic: Mnemonic) -> Option<(u8, bool)> {
-        use Mnemonic::*;
-        match mnemonic {
-            Bbr0 => Some((0, false)),
-            Bbr1 => Some((1, false)),
-            Bbr2 => Some((2, false)),
-            Bbr3 => Some((3, false)),
-            Bbr4 => Some((4, false)),
-            Bbr5 => Some((5, false)),
-            Bbr6 => Some((6, false)),
-            Bbr7 => Some((7, false)),
-            Bbs0 => Some((0, true)),
-            Bbs1 => Some((1, true)),
-            Bbs2 => Some((2, true)),
-            Bbs3 => Some((3, true)),
-            Bbs4 => Some((4, true)),
-            Bbs5 => Some((5, true)),
-            Bbs6 => Some((6, true)),
-            Bbs7 => Some((7, true)),
-            _ => None,
+    fn branch_bit_info(op: u8) -> Option<(u8, bool)> {
+        if op & 0xF != 0xF {
+            return None;
         }
+        let high = op >> 4;
+        Some((high % 8, high / 8 > 0))
     }
 }
 
@@ -531,17 +508,13 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
             Dec => scratch.op0 = self.alu_dec(scratch.op0),
             Tsb => scratch.op0 = self.alu_tsb(scratch.op0),
             Trb => scratch.op0 = self.alu_trb(scratch.op0),
-            m if Self::bit_index_rmb(m).is_some() => {
-                if let Some(bit) = Self::bit_index_rmb(mnemonic) {
+            _ => {
+                if let Some(bit) = Self::bit_index_rmb(self.opcode) {
                     scratch.op0 = self.alu_clear_bit(scratch.op0, bit);
-                }
-            }
-            m if Self::bit_index_smb(m).is_some() => {
-                if let Some(bit) = Self::bit_index_smb(mnemonic) {
+                } else if let Some(bit) = Self::bit_index_smb(self.opcode) {
                     scratch.op0 = self.alu_set_bit(scratch.op0, bit);
                 }
             }
-            _ => {}
         }
     }
 
@@ -560,7 +533,7 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
             Bvs => (status & psr::V) != 0,
             Bra => true,
             _ => {
-                if let Some((bit, expect_set)) = Self::branch_bit_info(mnemonic) {
+                if let Some((bit, expect_set)) = Self::branch_bit_info(self.opcode) {
                     let mask = 1 << bit;
                     let set = (scratch.op0 & mask) != 0;
                     set == expect_set

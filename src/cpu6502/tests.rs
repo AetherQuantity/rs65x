@@ -57,7 +57,7 @@ impl Harness {
 
 impl Bus for Harness {
     fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> (u8, WaitStates) {
-        //println!("read access at {addr:X}");
+        println!("read access at {addr:#04X}");
         let access_type = AccessType::Read;
         let addr16 = addr as u16;
         let data = self.mem[addr16 as usize];
@@ -74,6 +74,7 @@ impl Bus for Harness {
     }
 
     fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) -> WaitStates {
+        //println!("read access at {addr:#04X}");
         let access_type = AccessType::Write;
         let addr16 = addr as u16;
         self.mem[addr16 as usize] = data;
@@ -188,16 +189,26 @@ fn run_instruction<F: Flavor>(
 mod mem_cycle_accuracy {
     use super::*;
     use crate::cpu6502::Cpu6502;
-    use crate::cpu6502::flavor::NMOS6502;
+    use crate::cpu6502::flavor::{NMOS6502, Rockwell65C02};
     use crate::psr;
 
     fn setup_6502(addr: u16, program: &[u8]) -> (Cpu6502<NMOS6502, Harness>, Harness) {
-        let mut bus = Harness::with_program(addr, program); // LDA #$42; NOP
+        let mut bus = Harness::with_program(addr, program);
         let mut cpu = Cpu6502::<NMOS6502, Harness>::new();
 
         cpu.reset(&mut bus);
         bus.clear_log(); // ignore reset-vector reads
-        assert_eq!(cpu.pc, 0x8000);
+        assert_eq!(cpu.pc, addr);
+        (cpu, bus)
+    }
+
+    fn setup_rockwell(addr: u16, program: &[u8]) -> (Cpu6502<Rockwell65C02, Harness>, Harness) {
+        let mut bus = Harness::with_program(addr, program);
+        let mut cpu = Cpu6502::<Rockwell65C02, Harness>::new();
+
+        cpu.reset(&mut bus);
+        bus.clear_log(); // ignore reset-vector reads
+        assert_eq!(cpu.pc, addr);
         (cpu, bus)
     }
 
@@ -514,6 +525,176 @@ mod mem_cycle_accuracy {
             Access::basic_write(0x01FF, 0x78),
         ];
         let prefetch = Access::basic_read(0x8001, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn inc_zp_rmw() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xE6, 0x08, 0xEA]); // INC $08; NOP
+        bus.mem[0x08] = 0xA0;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 5, "SMB0 (rmw) should take 5 cycles");
+        assert_eq!(bus.mem[0x08], 0xA1);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0xE6),
+            Access::basic_read(0x8001, 0x08),
+            Access::basic_read(0x0008, 0xA0),
+            Access::basic_write(0x0008, 0xA0),
+            Access::basic_write(0x0008, 0xA1),
+        ];
+        let prefetch = Access::basic_read(0x8002, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn smb4_rmw() {
+        let (mut cpu, mut bus) = setup_rockwell(0x8000, &[0xC7, 0x08, 0xEA]); // SMB4 $08; NOP
+        bus.mem[0x08] = 0xA0;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 5, "SMB0 (rmw) should take 5 cycles");
+        assert_eq!(bus.mem[0x08], 0xB0);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0xC7),
+            Access::basic_read(0x8001, 0x08),
+            Access::basic_read(0x0008, 0xA0),
+            Access::basic_read(0x0008, 0xA0), // on a 6502 rmw this would be a write!!
+            Access::basic_write(0x0008, 0xB0),
+        ];
+        let prefetch = Access::basic_read(0x8002, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn beq_rel_take() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xF0, 0x10, 0xEA]); // BEQ #$10; NOP
+        cpu.p |= psr::Z; // make sure Z is set
+        bus.mem[0x8012] = 0xE8; // INX
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(
+            trace.cycles, 3,
+            "BEQ should take 3 cycles on branch taken same page"
+        );
+        // i mean, technically 4 according to 6502_cpu.txt, but the 4th is next opcode fetch which we classify
+        // as prefetch
+        assert_eq!(cpu.pc, 0x8013);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0xF0),
+            Access::basic_read(0x8001, 0x10),
+            Access::basic_read(0x8002, 0xEA), // dummy read
+        ];
+        let prefetch = Access::basic_read(0x8012, 0xE8);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn bmi_rel_take_back() {
+        let (mut cpu, mut bus) = setup_6502(0x8060, &[0x30, 0xF0, 0xEA]); // BMI #$-10; NOP
+        cpu.p |= psr::N; // make sure Z is set
+        bus.mem[0x8052] = 0xE8; // INX
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(
+            trace.cycles, 3,
+            "BEQ should take 3 cycles on branch taken same page"
+        );
+        // i mean, technically 4 according to 6502_cpu.txt, but the 4th is next opcode fetch which we classify
+        // as prefetch
+        assert_eq!(cpu.pc, 0x8053);
+
+        let accesses = vec![
+            Access::basic_read(0x8060, 0x30),
+            Access::basic_read(0x8061, 0xF0),
+            Access::basic_read(0x8062, 0xEA), // dummy read
+        ];
+        let prefetch = Access::basic_read(0x8052, 0xE8);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn bvc_rel_take_cross_page() {
+        let (mut cpu, mut bus) = setup_6502(0x80F0, &[0x50, 0x10, 0xEA]); // BVC #$10; NOP
+        cpu.p &= !psr::V; // make sure V is clear
+        bus.mem[0x8002] = 0x78; // junk data at wrong address
+        bus.mem[0x8102] = 0xE8; // INX
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(
+            trace.cycles, 4,
+            "BEQ should take 4 cycles on branch taken different page"
+        );
+        // i mean, technically 5 according to 6502_cpu.txt, but the 5th is next opcode fetch which we classify
+        // as prefetch
+        assert_eq!(cpu.pc, 0x8103);
+
+        let accesses = vec![
+            Access::basic_read(0x80F0, 0x50),
+            Access::basic_read(0x80F1, 0x10),
+            Access::basic_read(0x80F2, 0xEA),
+            Access::basic_read(0x8002, 0x78),
+        ];
+        let prefetch = Access::basic_read(0x8102, 0xE8);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn bcc_rel_take_back_cross_page() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x90, 0xF0, 0xEA]); // BCC #$-10; NOP
+        cpu.p &= !psr::C; // make sure C is clear
+        bus.mem[0x80F2] = 0x78; // junk data at wrong address
+        bus.mem[0x7FF2] = 0xE8; // INX
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(
+            trace.cycles, 4,
+            "BEQ should take 4 cycles on branch taken different page"
+        );
+        // i mean, technically 5 according to 6502_cpu.txt, but the 5th is next opcode fetch which we classify
+        // as prefetch
+        assert_eq!(cpu.pc, 0x7FF3);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x90),
+            Access::basic_read(0x8001, 0xF0),
+            Access::basic_read(0x8002, 0xEA), // dummy read
+            Access::basic_read(0x80F2, 0x78), // bad read at invalid address
+        ];
+        let prefetch = Access::basic_read(0x7FF2, 0xE8);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn bcs_rel_no_take() {
+        // only throw
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xB0, 0xF0, 0xEA]); // BCC #$-10; NOP
+        cpu.p &= !psr::C; // make sure C is clear
+        bus.mem[0x80F2] = 0x78; // junk data at wrong address
+        bus.mem[0x7FF2] = 0xE8; // INX
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(
+            trace.cycles, 2,
+            "BCS should take 2 cycles on branch not taken"
+        );
+        assert_eq!(cpu.pc, 0x8003);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0xB0),
+            Access::basic_read(0x8001, 0xF0),
+        ];
+        let prefetch = Access::basic_read(0x8002, 0xEA);
 
         trace.assert_accesses(accesses);
         trace.assert_prefetch(prefetch);

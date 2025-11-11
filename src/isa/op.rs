@@ -304,11 +304,12 @@ impl MicroExecutor {
                 StepResult::Pending
             }
             Uop::AluModify => {
+                let addr = ((ctx.data_bank() as u32) << 16) | (self.ea & 0xFFFF);
                 let wait: WaitStates = if ctx.rmw_dummy_write() {
-                    let addr = ((ctx.data_bank() as u32) << 16) | (self.ea & 0xFFFF);
                     bus.write(addr, self.op0, true, false)
                 } else {
-                    0
+                    let (_, wait) = bus.read(addr, true, false);
+                    wait
                 };
                 ctx.alu_modify(self);
                 ctx.tick(wait);
@@ -322,9 +323,13 @@ impl MicroExecutor {
                 StepResult::Pending
             }
             Uop::AluBranch => {
-                let result = ctx.alu_branch(self, queue);
-                if result {
-                    // at least one more cycle, alu_branch added to the
+                let old_pc = ctx.pc() as u32;
+                if ctx.alu_branch(self, queue) {
+                    // branch taken, alu_branch added a bunch of uops to our queue
+                    // but we still need to dummy read what would have been the opcode on this cycle
+                    // alu_branch already added to pc, but need to read from pre-offset pc
+                    let (_, wait) = bus.read(old_pc, false, true);
+                    ctx.tick(wait);
                     StepResult::Pending
                 } else {
                     // branch not taken, fetch next opcode on this cycle
