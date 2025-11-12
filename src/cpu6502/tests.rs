@@ -213,7 +213,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn asl_implied() {
+    fn imp_asl() {
         // A/S/L?????
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x0A, 0xEA]); // ASL A; NOP
         cpu.a = 0b1001_1100; // some random bits to see if they rotate
@@ -234,7 +234,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn ldy_immediate() {
+    fn imm_ldy() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xA0, 0x42, 0xEA]); // LDY #$42; NOP
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 2, "LDY # should be 2 cycles");
@@ -252,7 +252,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn sty_zero_page() {
+    fn zp_sty() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x84, 0xAB, 0xEA]); // STY $AB; NOP
         cpu.y = 0x77;
         let trace = run_instruction(&mut cpu, &mut bus);
@@ -272,7 +272,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn cmp_zp_x() {
+    fn zp_x_cmp() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xD5, 0x62, 0xEA]); // CMP $62,X; NOP
         bus.mem[0x62] = 0x66; // not the byte we are addressing
         bus.mem[0x65] = 0x88; // this is the correct byte
@@ -297,7 +297,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn eor_indirect_x() {
+    fn ind_x_eor() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x41, 0x62, 0xEA]); // EOR ($62, X); NOP
         bus.mem[0x62] = 0xFF; // not the byte we are addressing
         bus.mem[0x65] = 0xEF; // low byte
@@ -326,14 +326,14 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn ora_indirect_x_zp_wrap() {
+    fn ind_x_zp_wrap_ora() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x01, 0x62, 0xEA]); // ORA ($62, X); NOP
         bus.mem[0x62] = 0xFF; // not the byte we are addressing
         bus.mem[0x60] = 0xEF; // low byte
         bus.mem[0x61] = 0xBE; // high byte
         bus.mem[0xBEEF] = 0x0F; // final byte we want
         cpu.x = 0xFE; // add 0xFE to 0x62, wrap around to 0x60
-        cpu.a = 0x42; // when EOR'd to 0x42, produces 0x00
+        cpu.a = 0x42; // when OR'd to 0x0F, produces 0x4F
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 6, "ORA IND,X should take 6 cycles");
         assert_eq!(cpu.a, 0x4F);
@@ -354,7 +354,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn lda_indirect_y_no_wrap() {
+    fn ind_y_no_wrap_ldy() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xB1, 0x62, 0xEA]); // LDA ($62),Y; NOP
         bus.mem[0x62] = 0xEA; // low byte of address
         bus.mem[0x63] = 0xBE; // high byte of address
@@ -382,7 +382,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn lda_indirect_y_wrap() {
+    fn ind_y_wrap_lda() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xB1, 0x62, 0xEA]); // LDA ($62),Y; NOP
         bus.mem[0x62] = 0xF0; // low byte of address
         bus.mem[0x63] = 0xBD; // high byte of address
@@ -412,7 +412,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn sta_indirect_y_no_wrap() {
+    fn indirect_y_no_wrap_sta() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x91, 0x62, 0xEA]); // STA ($62),Y; NOP
         bus.mem[0x62] = 0xEA; // low byte of address
         bus.mem[0x63] = 0xBE; // high byte of address
@@ -440,7 +440,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn and_absolute() {
+    fn abs_and() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x2D, 0xEF, 0xBE, 0xEA]); // AND $BEEF; NOP
         bus.mem[0xBEEF] = 0b1100_0011; // bit pattern to be anded to accumulator
         cpu.a = 0b0101_0101;
@@ -463,7 +463,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn ldx_absolute_y() {
+    fn abs_y_ldx() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xBE, 0xEE, 0xBE, 0xEA]); // LDX $BEEF,Y; NOP
         bus.mem[0xBEEE] = 0x13; // not the correct address
         bus.mem[0xBEEF] = 0x26; // here's the correct address
@@ -487,7 +487,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn pla() {
+    fn stack_pla() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x68, 0xEA]); // PHA; NOP
         cpu.s = 0xFE;
         bus.mem[0x01FE] = 0x65;
@@ -510,7 +510,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn pha() {
+    fn stack_pha() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x48, 0xEA]); // PHA; NOP
         cpu.s = 0xFF;
         cpu.a = 0x78;
@@ -531,7 +531,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn inc_zp_rmw() {
+    fn zp_rmw_inc() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xE6, 0x08, 0xEA]); // INC $08; NOP
         bus.mem[0x08] = 0xA0;
         let trace = run_instruction(&mut cpu, &mut bus);
@@ -573,7 +573,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn beq_rel_take() {
+    fn rel_take_beq() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xF0, 0x10, 0xEA]); // BEQ #$10; NOP
         cpu.p |= psr::Z; // make sure Z is set
         bus.mem[0x8012] = 0xE8; // INX
@@ -598,7 +598,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn bmi_rel_take_back() {
+    fn rel_take_back_bmi() {
         let (mut cpu, mut bus) = setup_6502(0x8060, &[0x30, 0xF0, 0xEA]); // BMI #$-10; NOP
         cpu.p |= psr::N; // make sure Z is set
         bus.mem[0x8052] = 0xE8; // INX
@@ -623,7 +623,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn bvc_rel_take_cross_page() {
+    fn rel_take_cross_page_bvc() {
         let (mut cpu, mut bus) = setup_6502(0x80F0, &[0x50, 0x10, 0xEA]); // BVC #$10; NOP
         cpu.p &= !psr::V; // make sure V is clear
         bus.mem[0x8002] = 0x78; // junk data at wrong address
@@ -650,7 +650,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn bcc_rel_take_back_cross_page() {
+    fn rel_take_back_cross_page_bcc() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0x90, 0xF0, 0xEA]); // BCC #$-10; NOP
         cpu.p &= !psr::C; // make sure C is clear
         bus.mem[0x80F2] = 0x78; // junk data at wrong address
@@ -677,8 +677,7 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn bcs_rel_no_take() {
-        // only throw
+    fn rel_no_take_bcs() {
         let (mut cpu, mut bus) = setup_6502(0x8000, &[0xB0, 0xF0, 0xEA]); // BCC #$-10; NOP
         cpu.p &= !psr::C; // make sure C is clear
         bus.mem[0x80F2] = 0x78; // junk data at wrong address
@@ -695,6 +694,31 @@ mod mem_cycle_accuracy {
             Access::basic_read(0x8001, 0xF0),
         ];
         let prefetch = Access::basic_read(0x8002, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn zprel_take_bbs2() {
+        let (mut cpu, mut bus) = setup_rockwell(0x8000, &[0xAF, 0x42, 0x10, 0xEA]); // BBS2 #$10; NOP
+        bus.mem[0x0042] = 0x3C; // bit 2 of this is set
+        bus.mem[0x8013] = 0xE8; // INX
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(
+            trace.cycles, 5,
+            "BBS should take 5 cycles on branch taken same page"
+        );
+        assert_eq!(cpu.pc, 0x8014);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0xAF),
+            Access::basic_read(0x8001, 0x42),
+            Access::basic_read(0x0042, 0x3C),
+            Access::basic_read(0x8002, 0x10),
+            Access::basic_read(0x8003, 0xEA), //dummy
+        ];
+        let prefetch = Access::basic_read(0x8013, 0xE8);
 
         trace.assert_accesses(accesses);
         trace.assert_prefetch(prefetch);
