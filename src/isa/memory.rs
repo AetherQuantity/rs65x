@@ -264,6 +264,9 @@ impl Uop {
             dest: Latch::EaHi,
         }
     }
+    const fn read_jmp_ptr(dest: Latch, hi: bool, x: bool) -> Self {
+        Uop::ReadJmpPtr { dest, hi, x }
+    }
     const fn read_dp_then_offset(latch: Latch, offset_type: OffsetType) -> Self {
         Uop::AddOffset8 {
             latch: latch,
@@ -377,7 +380,18 @@ impl AddressMode {
                         queue.push(Uop::Finished);
                     }
                     JumpType::JmpIndirect | JumpType::JmpIndirectX => {
-                        todo!("JmpIndirect requires absolute pointer support");
+                        let x = jump_type == JumpType::JmpIndirectX;
+                        queue.push(Uop::fetch_into(PtrLo));
+                        // the 65C02 performs a dummy read of PtrHi here,
+                        // and takes care of both page crossings and x offset.
+                        // the 65C816 doesn't perform this dummy read, Indirect is 5 cycles always
+                        queue.push(Uop::fetch_into(PtrHi));
+                        // however, the 65C816 in emulation mode performs a read here, though
+                        // with the vda/vpa/etc pins disabled, address bus set to PtrHi
+                        // and uses this cycle to add x
+                        queue.push(Uop::read_jmp_ptr(PcLo, false, x));
+                        queue.push(Uop::read_jmp_ptr(PcHi, true, x));
+                        queue.push(Uop::Finished);
                     }
                     JumpType::ToSubroutine => {
                         // this is very similar to JmpAbsolute, with stuff in the middle

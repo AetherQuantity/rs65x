@@ -40,6 +40,12 @@ pub enum Uop {
         latch: super::memory::Latch,
         offset_type: super::memory::address_mode_subtypes::OffsetType,
     },
+    /// Read from an absolute 16-bit pointer stored in the scratch register.
+    ReadJmpPtr {
+        dest: super::memory::Latch,
+        hi: bool,
+        x: bool,
+    },
     /// Fetch Effective Address High, then set PC to entire EA
     FetchEaHiAndJump,
     /// Set Program Counter to Effective Address, dummy read PC, then increment PC
@@ -135,6 +141,16 @@ impl UopQueue {
         }
         Some(front)
     }
+    /// insert can only be called when head is >0! this is a REALLY HACKY
+    /// insert that moves head back and inserts there, leaving everything
+    /// afterwards in tact but replacing the *last executed* uop.
+    #[inline(always)]
+    pub fn insert(&mut self, new: Uop) {
+        debug_assert!(self.head > 0);
+        println!("inserting into buf[{}]", self.head);
+        self.head -= 1;
+        unsafe { *self.buf.get_unchecked_mut(self.head as usize) = new }
+    }
 }
 
 #[derive(Default, Clone)]
@@ -182,6 +198,12 @@ pub trait MicroContext {
 
     /// Whether this context should perform the legacy NMOS dummy write during RMW sequences.
     fn rmw_dummy_write(&self) -> bool;
+
+    /// Whether JMP (indirect) should emulate the original NMOS page-wrap bug.
+    #[inline(always)]
+    fn jmp_indirect_wrap_bug(&self) -> bool {
+        false
+    }
 
     /// Prepare the value that should be written to memory for store-style instructions.
     fn alu_prepare_store(&mut self, scratch: &mut MicroExecutor) -> u8;
@@ -286,10 +308,28 @@ impl MicroExecutor {
                     StepResult::Pending
                 }
             }
+            Uop::ReadJmpPtr { dest, hi, x } => {
+                println!("reading jmp ptr hi={hi}");
+                let base = self.ptr.wrapping_add(if x { ctx.reg_x() } else { 0 });
+                let addr = if !hi {
+                    base
+                } else if ctx.jmp_indirect_wrap_bug() {
+                    (base & 0xFF00) | (((base as u8).wrapping_add(1)) as u16)
+                } else {
+                    // weirdly, we've already computed 16-bit high byte address
+                    // on the dummy read of the operand high byte. we're done here
+                    base.wrapping_add(1)
+                };
+                let (data, wait) = bus.read(addr as u32, true, false);
+                self.data_latch = data;
+                self.write_latch(ctx, dest, data);
+                ctx.tick(wait);
+                StepResult::Pending
+            }
             Uop::FetchEaHiAndJump => {
                 let (addr, vda, vpa) = self.resolve_memloc(ctx, super::memory::MemLoc::Pc);
                 let (ea_high, wait) = bus.read(addr, vda, vpa);
-                let ea = ((ea_high as u16) << 8) | (self.ea as u16 & 0xFFFF);
+                let ea = ((ea_high as u16) << 8) | (self.ea as u16 & 0xFF);
                 ctx.set_pc(ea);
                 ctx.tick(wait);
                 StepResult::Pending // we can't fetch opcode on this cycle unfortunately

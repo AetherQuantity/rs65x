@@ -723,4 +723,98 @@ mod mem_cycle_accuracy {
         trace.assert_accesses(accesses);
         trace.assert_prefetch(prefetch);
     }
+
+    #[test]
+    fn jmpabs() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x4C, 0x69, 0x80]); // JMP $8069
+        bus.mem[0x8069] = 0xEA; // NOP
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 3, "JMP ABS should take 3 cycles");
+        assert_eq!(cpu.pc, 0x806A);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x4C),
+            Access::basic_read(0x8001, 0x69),
+            Access::basic_read(0x8002, 0x80),
+        ];
+        let prefetch = Access::basic_read(0x8069, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn jmpind_normal() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x6C, 0x69, 0x80]); // JMP ($8069)
+        bus.mem[0x8069] = 0xEF;
+        bus.mem[0x806A] = 0xBE;
+        bus.mem[0xBEEF] = 0xEA;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 5, "JMP IND should take 5 cycles on NMOS");
+        assert_eq!(cpu.pc, 0xBEF0);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x6C),
+            Access::basic_read(0x8001, 0x69),
+            Access::basic_read(0x8002, 0x80),
+            Access::basic_read(0x8069, 0xEF),
+            Access::basic_read(0x806A, 0xBE),
+        ];
+        let prefetch = Access::basic_read(0xBEEF, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn jmpind_wrap_bug() {
+        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x6C, 0xFF, 0x80]); // JMP ($80FF)
+        bus.mem[0x80FF] = 0xEF;
+        bus.mem[0x8100] = 0xBE;
+        bus.mem[0xBEEF] = 0xEA;
+        bus.mem[0x6CEF] = 0x01; // whatever junk data
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 5, "JMP IND should take 5 cycles");
+        assert_eq!(cpu.pc, 0x6CF0);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x6C),
+            Access::basic_read(0x8001, 0xFF),
+            Access::basic_read(0x8002, 0x80),
+            Access::basic_read(0x80FF, 0xEF),
+            Access::basic_read(0x8000, 0x6C), // uh oh, bad address! should have been 0x8100
+        ];
+        let prefetch = Access::basic_read(0x6CEF, 0x01);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn jmpind_wrap_fix() {
+        let (mut cpu, mut bus) = setup_rockwell(0x8000, &[0x6C, 0xFF, 0x80]); // JMP ($80FF)
+        bus.mem[0x80FF] = 0xEF;
+        bus.mem[0x8100] = 0xBE;
+        bus.mem[0xBEEF] = 0xEA;
+        bus.mem[0x6CEF] = 0x01; // whatever junk data
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 6, "JMP IND should take 6 cycles on CMOS");
+        assert_eq!(cpu.pc, 0xBEF0);
+
+        // the CMOS JMP IND dummy reads the high byte of operand an extra time, NOT the incorrect
+        // address, as per https://github.com/CompuSAR/sar6502/blob/master/sar6502.srcs/sim_1/new/test_plan.mem
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x6C),
+            Access::basic_read(0x8001, 0xFF),
+            Access::basic_read(0x8002, 0x80),
+            Access::basic_read(0x8002, 0x80), // dummy read here for some reason
+            Access::basic_read(0x80FF, 0xEF),
+            Access::basic_read(0x8100, 0xBE), // fix, hooray!
+        ];
+        let prefetch = Access::basic_read(0xBEEF, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
 }

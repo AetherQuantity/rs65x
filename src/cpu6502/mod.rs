@@ -471,6 +471,11 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
     }
 
     #[inline(always)]
+    fn jmp_indirect_wrap_bug(&self) -> bool {
+        F::JMP_INDIRECT_WRAP_BUG
+    }
+
+    #[inline(always)]
     fn direct_page_base(&self) -> u16 {
         0
     }
