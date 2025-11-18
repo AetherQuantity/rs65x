@@ -11,9 +11,10 @@ pub mod tests;
 use core::marker::PhantomData;
 
 use crate::bus::Bus;
-use crate::isa::memory::{AddressMode, address_mode_subtypes::NoMemType};
-use crate::isa::op::{MicroContext, MicroExecutor, StepResult, Uop, UopQueue};
+use crate::isa::microcycle::{DecodeContext, UcycQueue};
+use crate::isa::op::{MicroContext, MicroExecutor, StepResult};
 use crate::isa::table::{Instruction, Mnemonic};
+use crate::isa::{AddressMode, address_mode_subtypes::NoMemType};
 use crate::psr;
 
 pub use flavor::Flavor; // re-export for convenience
@@ -27,7 +28,7 @@ pub struct Cpu6502<F: Flavor, B: Bus> {
     pub p: u8,   // processor status
     pub pc: u16, // program counter
     pub cycles: u64,
-    uops: UopQueue,
+    ucycs: UcycQueue,
     scratch: MicroExecutor,
     current_inst: Option<Instruction>,
     current_opcode: u8,
@@ -45,7 +46,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             p: psr::I | psr::U_6502, // I set, U set in pushes on many parts
             pc: 0,
             cycles: 0,
-            uops: UopQueue::default(),
+            ucycs: UcycQueue::default(),
             scratch: MicroExecutor::new(),
             current_inst: None,
             current_opcode: 0,
@@ -75,7 +76,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         self.p |= psr::I; // mask IRQ
         self.pc = Self::read16(bus, 0xFFFC); // TODO: implement the real cycle-accurate reset sequence
         self.cycles = 0;
-        self.uops.clear();
+        self.ucycs.clear();
         self.scratch.reset();
         self.current_inst = None;
         self.current_opcode = 0;
@@ -93,9 +94,17 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         self.current_opcode = opcode;
         self.current_inst = Some(instruction);
         self.scratch.reset();
+        self.scratch.memory_action = instruction.memory_action;
+        let ctx = DecodeContext {
+            e_flag: true,
+            m_flag: true,
+            x_flag: true,
+            action: instruction.memory_action,
+            modify_read: !F::RMW_DUMMY_WRITE,
+        };
         instruction
             .address_mode
-            .emit_uops(&mut self.uops, instruction.memory_action);
+            .emit_ucycs::<F::Micro>(&mut self.ucycs, ctx);
     }
 
     fn finish_read(&mut self, op: Mnemonic) {
@@ -163,7 +172,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     pub fn step(&mut self, bus: &mut B) -> StepResult {
-        if self.uops.front().is_none() {
+        if self.ucycs.front().is_none() {
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
         }
@@ -185,12 +194,12 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 opcode: self.current_opcode,
                 _marker: PhantomData,
             };
-            self.scratch.execute_next(&mut ctx, bus, &mut self.uops)
+            self.scratch.execute_next(&mut ctx, bus, &mut self.ucycs)
         };
 
         if matches!(result, StepResult::InstructionFinished) {
             // for read instructions, the byte is stored in Op0
-            if instruction.memory_action == crate::isa::memory::MemoryAction::Read {
+            if instruction.memory_action == crate::isa::MemoryAction::Read {
                 self.finish_read(instruction.mnemonic);
             }
             if matches!(
@@ -492,10 +501,11 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
     fn alu_prepare_store(&mut self, scratch: &mut MicroExecutor) -> u8 {
         use Mnemonic::*;
         match self.mnemonic() {
-            Sta => scratch.op0 = *self.a,
-            Stx => scratch.op0 = *self.x,
-            Sty => scratch.op0 = *self.y,
+            Sta | Pha => scratch.op0 = *self.a,
+            Stx | Phx => scratch.op0 = *self.x,
+            Sty | Phy => scratch.op0 = *self.y,
             Stz => scratch.op0 = 0,
+            Php => scratch.op0 = *self.status,
             _ => {}
         }
         scratch.op0
@@ -523,11 +533,11 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
         }
     }
 
-    fn alu_branch(&mut self, scratch: &mut MicroExecutor, queue: &mut UopQueue) -> bool {
+    fn alu_branch(&mut self, scratch: &mut MicroExecutor, _queue: &mut UcycQueue) -> bool {
         use Mnemonic::*;
         let status = *self.status;
         let mnemonic = self.mnemonic();
-        let taken = match mnemonic {
+        match mnemonic {
             Bcc => (status & psr::C) == 0,
             Bcs => (status & psr::C) != 0,
             Beq => (status & psr::Z) != 0,
@@ -546,26 +556,7 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
                     false
                 }
             }
-        };
-        if taken {
-            let old_pc = self.pc();
-            let target = old_pc.wrapping_add(scratch.signed_offset8 as i16 as u16);
-            let addr = ((old_pc & 0xFF00) | (target & 0x00FF)) as u16;
-            // first: set the PC to this new offset address. could be valid or invalid
-            self.set_pc(addr);
-            let page_cross = (old_pc & 0xFF00) != (target & 0xFF00);
-            if !page_cross {
-                // easy mode: the PC is already correct, finish on next cycle (and fetch next opcode)
-                queue.push(Uop::Finished);
-            } else {
-                // slightly harder mode: the PC is incorrect, so we need to fix it next cycle.
-                // FixPc reads the wrong one next cycle and fixes, finished reads true addr as next opcode
-                queue.push(Uop::FixPc(target));
-                queue.push(Uop::Finished);
-            }
         }
-        // if branch not taken, push nothing--we read the next opcode on THIS CYCLE
-        taken
     }
 
     fn alu_push_value(&mut self, _scratch: &mut MicroExecutor) -> u8 {

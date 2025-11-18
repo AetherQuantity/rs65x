@@ -1,7 +1,6 @@
-use crate::isa::memory::address_mode_subtypes::NoMemType;
-
-use super::memory::{AddressMode, MemoryAction};
 use core::fmt::{Display, Error, Formatter};
+
+use crate::isa::{AddressMode, MemoryAction, NoMemType, address_mode_subtypes};
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct OpcodeError {
@@ -67,7 +66,7 @@ macro_rules! define_opcodes {
                     #[allow(unused_imports)] // for some reason my use statement here is generating this warning
                     use Mnemonic::*;
                     #[allow(unused_imports)]
-                    use super::memory::address_mode_subtypes::
+                    use address_mode_subtypes::
                         {NoMemType::*, OffsetType::*, JumpType::*, BranchType::*, JumpType::*};
                     let memory_action = action_for_mnemonic($mnemonic);
                     table[$code as usize] = Instruction {

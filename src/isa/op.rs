@@ -6,79 +6,11 @@
 
 use crate::{
     bus::{Bus, WaitStates},
-    isa::memory::{MemoryAction, OffsetType},
+    isa::{
+        Latch, MemoryAction,
+        microcycle::{AluOp, MicroCycle, UcycQueue},
+    },
 };
-
-const MAX_UOPS: usize = 14;
-
-/// Micro-Operations
-///
-/// Operations are comprised of many different Uops, which perform sub-op tasks like
-/// memory access or individual ALU operations. Each Uop is one cycle USUALLY, though
-/// can be zero cycles in cases where optional address-fixing stuff takes place
-#[derive(Clone, Copy)]
-pub enum Uop {
-    // MEMORY ACCESS UOPS
-    /// Reads a value from memory into a latch
-    Read {
-        src: super::memory::MemLoc,
-        dest: super::memory::Latch,
-    },
-    /// Push the data from a latch to the memory location denoted by Stack Pointer. If dec,
-    /// decrement the Stack Pointer.
-    Push {
-        src: super::memory::Latch,
-        dec: bool,
-    },
-    /// Pull the data from the stack into a given latch. If inc, increment the Stack Pointer
-    Pull {
-        dest: super::memory::Latch,
-        inc: bool,
-    },
-    /// Read from the address in latch, pre-offset. Then, add offset to that latch.
-    AddOffset8 {
-        latch: super::memory::Latch,
-        offset_type: super::memory::address_mode_subtypes::OffsetType,
-    },
-    /// Read from an absolute 16-bit pointer stored in the scratch register.
-    ReadJmpPtr {
-        dest: super::memory::Latch,
-        hi: bool,
-        x: bool,
-    },
-    /// Fetch Effective Address High, then set PC to entire EA
-    FetchEaHiAndJump,
-    /// Set Program Counter to Effective Address, dummy read PC, then increment PC
-    ReturnToEa,
-    /// Request ALU to determine whether we branch or not, and populate uop queue further. This uop takes:
-    /// - Zero cycles if branch not taken--the read we do on this cycle is the opcode for the next cycle
-    /// - One cycle if branch taken to same page, a read is done regardless and is the next opcode if valid
-    /// - Two cycles if branch taken to different page and opcode is read
-    AluBranch,
-    /// Finished: a zero-cycle uop that should function as the fetch of the next opcode
-    Finished,
-
-    // ALU stuff
-    /// Write the contents of Op0 to EA
-    AluWrite,
-    /// Tell the ALU to modify Op0 and store the result in Op0
-    ///
-    /// TODO: the Rockwell documentation for the R and C variants of the 6502 claims that this uop
-    ///       performs a dummy read of the EA for RMW, as opposed to the CMOS variant's dummy write of the
-    ///       pre-modified value. I'll have to do some research about this.
-    AluModify,
-    /// Push register onto stack
-    ///
-    /// This Uop does two things in order. First, we push the requested register to the stack. Second,
-    /// we decrement the Stack Pointer. These two things happen in the same cycle.
-    AluPush,
-    /// Dummy read the old PC and fix the PC
-    ///
-    /// Used for branches, where they occur across a page boundary
-    FixPc(u16),
-    /// On this cycle, if the action is Read
-    ReadOrFix(super::memory::OffsetType, super::memory::MemoryAction),
-}
 
 #[derive(Clone, Copy)]
 pub enum DataDest {
@@ -88,71 +20,6 @@ pub enum DataDest {
     DataLatch,
 }
 
-/// A completely stack-based queue that i'm trying to make super duper
-/// lightning fast since it's in the hot path
-pub struct UopQueue {
-    buf: [Uop; MAX_UOPS],
-    head: u8, // next to execute (pop front)
-    len: u8,  // number of valid entries
-}
-
-impl Default for UopQueue {
-    fn default() -> Self {
-        Self {
-            buf: [Uop::Finished; MAX_UOPS],
-            head: 0,
-            len: 0,
-        }
-    }
-}
-
-impl UopQueue {
-    #[inline(always)]
-    pub fn clear(&mut self) {
-        self.head = 0;
-        self.len = 0;
-    }
-    #[inline(always)]
-    pub fn is_empty(&self) -> bool {
-        self.head == self.len
-    }
-    #[inline(always)]
-    pub fn push(&mut self, u: Uop) {
-        debug_assert!((self.len as usize) < MAX_UOPS);
-        unsafe {
-            *self.buf.get_unchecked_mut(self.len as usize) = u;
-        }
-        self.len += 1;
-    }
-    #[inline(always)]
-    pub fn front(&self) -> Option<Uop> {
-        if self.head >= self.len {
-            return None;
-        }
-        debug_assert!(self.head < MAX_UOPS as u8);
-        unsafe { Some(*self.buf.get_unchecked(self.head as usize)) }
-    }
-    #[inline(always)]
-    pub fn pop(&mut self) -> Option<Uop> {
-        let front = self.front()?;
-        self.head += 1;
-        if self.head >= self.len {
-            self.clear();
-        }
-        Some(front)
-    }
-    /// insert can only be called when head is >0! this is a REALLY HACKY
-    /// insert that moves head back and inserts there, leaving everything
-    /// afterwards in tact but replacing the *last executed* uop.
-    #[inline(always)]
-    pub fn insert(&mut self, new: Uop) {
-        debug_assert!(self.head > 0);
-        println!("inserting into buf[{}]", self.head);
-        self.head -= 1;
-        unsafe { *self.buf.get_unchecked_mut(self.head as usize) = new }
-    }
-}
-
 #[derive(Default, Clone)]
 pub struct MicroExecutor {
     pub data_latch: u8,
@@ -160,6 +27,7 @@ pub struct MicroExecutor {
     pub ptr: u16,
     pub op0: u8,
     pub signed_offset8: i8,
+    pub memory_action: MemoryAction,
 }
 
 pub enum StepResult {
@@ -211,8 +79,8 @@ pub trait MicroContext {
     /// Execute the read-modify portion of a Read-Modify-Write instruction.
     fn alu_modify(&mut self, scratch: &mut MicroExecutor);
 
-    /// Evaluate a branch, updating program counter / queue and returning penalty info.
-    fn alu_branch(&mut self, scratch: &mut MicroExecutor, queue: &mut UopQueue) -> bool;
+    /// Evaluate a branch, returning whether the branch was taken
+    fn alu_branch(&mut self, scratch: &mut MicroExecutor, queue: &mut UcycQueue) -> bool;
 
     /// Produce the value to be pushed onto the stack for stack-write instructions.
     fn alu_push_value(&mut self, scratch: &mut MicroExecutor) -> u8;
@@ -233,223 +101,162 @@ impl MicroExecutor {
         &mut self,
         ctx: &mut C,
         bus: &mut B,
-        queue: &mut UopQueue,
+        queue: &mut UcycQueue,
     ) -> StepResult {
-        let Some(uop) = queue.pop() else {
+        let Some(ucyc) = queue.pop() else {
             return StepResult::InstructionFinished;
         };
+        // pre memory access alu stuff:
+        let mut fixed_addr = None;
+        match ucyc.alu {
+            AluOp::NextOpcode => {
+                // we can ignore everything else i guess, PC guaranteed ok for next opcode fetch
+                return StepResult::InstructionFinished;
+            }
+            AluOp::OffsetWithExtraCycle(offset_type) => {
+                // before the memory access, we add offset to the low byte of EA.
+                // technically, this happened last cycle after memory access
+                // but codewise it was easier to kinda jank it in right here, and
+                // who cares what the internal latches are doing!
+                let ea_lo = self.ea as u8;
+                let offset = match offset_type {
+                    crate::isa::OffsetType::None => 0,
+                    crate::isa::OffsetType::X => ctx.reg_x(),
+                    crate::isa::OffsetType::Y => ctx.reg_y(),
+                };
+                let target_ea = self.ea.wrapping_add(offset as u32);
+                self.ea = (self.ea & !0xFF) | (ea_lo.wrapping_add(offset as u8) as u32);
+                if self.ea != target_ea {
+                    println!("ea {} != target ea {target_ea}", self.ea);
+                    fixed_addr = Some(target_ea)
+                }
+            }
+            _ => {}
+        }
 
-        match uop {
-            Uop::Read { src, dest } => {
-                let (addr, vda, vpa) = self.resolve_memloc(ctx, src);
-                let (data, wait) = bus.read(addr, vda, vpa);
-                self.data_latch = data;
-                self.write_latch(ctx, dest, data);
-                ctx.tick(wait);
-                StepResult::Pending
-            }
-            Uop::Push { src, dec } => {
-                let value = self.read_latch(ctx, src);
-                let addr = (ctx.stack_base() as u32) | (ctx.sp() as u32);
-                let wait = bus.write(addr, value, true, false);
-                ctx.tick(wait);
-                if dec {
-                    ctx.set_sp(ctx.sp().wrapping_sub(1));
-                }
-                StepResult::Pending
-            }
-            Uop::Pull { dest, inc } => {
-                let addr = (ctx.stack_base() as u32) | (ctx.sp() as u32);
-                let (data, wait) = bus.read(addr, true, false);
-                self.data_latch = data;
-                self.write_latch(ctx, dest, data);
-                ctx.tick(wait);
-                if inc {
-                    ctx.set_sp(ctx.sp().wrapping_add(1));
-                }
-                StepResult::Pending
-            }
-            Uop::AddOffset8 { latch, offset_type } => {
-                let addr = match latch {
-                    crate::isa::memory::Latch::Ptr => self.ptr as u32,
-                    crate::isa::memory::Latch::Ea => self.ea,
-                    _ => unreachable!("only ptr and ea should be adding offset"),
+        // perform the memory access portion of this cycle:
+        let addr = self.address_of(ucyc.bus.addr, ctx);
+        if ucyc.bus.read {
+            let (data, wait) = bus.read(addr, ucyc.bus.vda, ucyc.bus.vpa);
+            self.data_latch = data;
+            self.write_latch(ctx, ucyc.copy_to, data);
+            ctx.tick(wait);
+        } else {
+            let value = ctx.alu_prepare_store(self);
+            let wait = bus.write(addr, value, ucyc.bus.vda, ucyc.bus.vpa);
+            ctx.tick(wait);
+        }
+        if ucyc.inc_src {
+            self.add_offset(ctx, ucyc.bus.addr, 1);
+        }
+
+        // post memory alu stuff:
+        match ucyc.alu {
+            AluOp::None => {}
+            AluOp::NextOpcode => unreachable!(),
+            AluOp::AddOffset { latch, offset } => {
+                let o = match offset {
+                    super::OffsetType::None => 0,
+                    super::OffsetType::X => ctx.reg_x(),
+                    super::OffsetType::Y => ctx.reg_y(),
                 };
-                let offset = match offset_type {
-                    OffsetType::X => ctx.reg_x(),
-                    OffsetType::Y => ctx.reg_y(),
-                    OffsetType::None => unreachable!(),
-                };
-                // dummy read at pre-offset location pointed to by latch
-                let (byte, wait) = bus.read(addr, true, false);
-                self.data_latch = byte;
-                self.write_latch(ctx, latch, (addr as u8).wrapping_add(offset as u8));
-                ctx.tick(wait);
-                StepResult::Pending
+                self.add_offset(ctx, latch, o);
             }
-            Uop::ReadOrFix(offset_type, action) => {
-                let offset = match offset_type {
-                    OffsetType::X => ctx.reg_x(),
-                    OffsetType::Y => ctx.reg_y(),
-                    OffsetType::None => unreachable!(),
-                };
-                let new_addr = self.ea + offset as u32;
-                let maybe_valid = (new_addr & 0xFF) | (self.ea & !0xFF);
-                let (byte, wait) = bus.read(maybe_valid, true, false);
-                self.ea = new_addr;
-                self.data_latch = byte;
-                ctx.tick(wait);
-                if action == MemoryAction::Read && (new_addr & 0xFFFF == maybe_valid & 0xFFFF) {
-                    // on a read cycle, if there's no overflow, we're done
-                    self.op0 = byte;
-                    StepResult::InstructionFinished
-                } else {
-                    // otherwise, after the read, let's fix the address and we can read/write/whatever next cycle
-                    StepResult::Pending
+            AluOp::OffsetWithExtraCycle(_) => {
+                if let Some(addr) = fixed_addr {
+                    // we need to fix the address! the queue already has a read and an opcode fetch
+                    // so we're done!
+                    self.ea = addr;
+                } else if self.memory_action == MemoryAction::Read {
+                    // we can short circuit here! next cycle is opcode fetch, which ends the op
+                    // and clears everything after it
+                    queue.insert(MicroCycle::opcode_fetch());
+                    // on writes and RMW's, we do the extra cycle even when addr is correct
                 }
             }
-            Uop::ReadJmpPtr { dest, hi, x } => {
-                println!("reading jmp ptr hi={hi}");
-                let base = self.ptr.wrapping_add(if x { ctx.reg_x() } else { 0 });
-                let addr = if !hi {
-                    base
-                } else if ctx.jmp_indirect_wrap_bug() {
-                    (base & 0xFF00) | (((base as u8).wrapping_add(1)) as u16)
-                } else {
-                    // weirdly, we've already computed 16-bit high byte address
-                    // on the dummy read of the operand high byte. we're done here
-                    base.wrapping_add(1)
-                };
-                let (data, wait) = bus.read(addr as u32, true, false);
-                self.data_latch = data;
-                self.write_latch(ctx, dest, data);
-                ctx.tick(wait);
-                StepResult::Pending
-            }
-            Uop::FetchEaHiAndJump => {
-                let (addr, vda, vpa) = self.resolve_memloc(ctx, super::memory::MemLoc::Pc);
-                let (ea_high, wait) = bus.read(addr, vda, vpa);
-                let ea = ((ea_high as u16) << 8) | (self.ea as u16 & 0xFF);
-                ctx.set_pc(ea);
-                ctx.tick(wait);
-                StepResult::Pending // we can't fetch opcode on this cycle unfortunately
-            }
-            Uop::ReturnToEa => {
-                // dummy read ea before we add 1 to it
-                let (addr, vda, vpa) = self.resolve_memloc(ctx, super::memory::MemLoc::Ea);
-                let (_, wait) = bus.read(addr, vda, vpa);
-                let ea = self.ea.wrapping_add(1) as u16;
-                ctx.set_pc(ea);
-                ctx.tick(wait);
-                StepResult::Pending
-            }
-            Uop::AluModify => {
-                let addr = ((ctx.data_bank() as u32) << 16) | (self.ea & 0xFFFF);
-                let wait: WaitStates = if ctx.rmw_dummy_write() {
-                    bus.write(addr, self.op0, true, false)
-                } else {
-                    let (_, wait) = bus.read(addr, true, false);
-                    wait
-                };
-                ctx.alu_modify(self);
-                ctx.tick(wait);
-                StepResult::Pending
-            }
-            Uop::AluWrite => {
-                let value = ctx.alu_prepare_store(self);
-                let addr = ((ctx.data_bank() as u32) << 16) | (self.ea & 0xFFFF);
-                let wait = bus.write(addr, value, true, false);
-                ctx.tick(wait);
-                StepResult::Pending
-            }
-            Uop::AluBranch => {
-                let old_pc = ctx.pc() as u32;
-                if ctx.alu_branch(self, queue) {
-                    // branch taken, alu_branch added a bunch of uops to our queue
-                    // but we still need to dummy read what would have been the opcode on this cycle
-                    // alu_branch already added to pc, but need to read from pre-offset pc
-                    let (_, wait) = bus.read(old_pc, false, true);
-                    ctx.tick(wait);
-                    StepResult::Pending
-                } else {
-                    // branch not taken, fetch next opcode on this cycle
-                    StepResult::InstructionFinished
-                }
-            }
-            Uop::AluPush => {
-                let value = ctx.alu_push_value(self);
-                let addr = (ctx.stack_base() as u32) | (ctx.sp() as u32);
-                let wait = bus.write(addr, value, true, false);
-                ctx.tick(wait);
+            AluOp::IncLatch(latch) => self.add_offset(ctx, latch, 1),
+            AluOp::Push => {
                 ctx.set_sp(ctx.sp().wrapping_sub(1));
-                StepResult::Pending
             }
-            Uop::FixPc(target) => {
-                let (addr, vda, vpa) = self.resolve_memloc(ctx, super::memory::MemLoc::Pc);
-                let (_, wait) = bus.read(addr, vda, vpa);
-                ctx.set_pc(target);
-                ctx.tick(wait);
-                StepResult::Pending
+            AluOp::Modify => {
+                ctx.alu_modify(self);
             }
-            Uop::Finished => StepResult::InstructionFinished,
+            AluOp::JumpToEa => {
+                ctx.set_pc(self.ea as u16);
+            }
+            AluOp::Branch => {
+                if ctx.alu_branch(self, queue) {
+                    // branch taken!
+                    // we need to figure out if we are branching to the same page or a different one
+                    let new_pc = ctx.pc().wrapping_add_signed(self.signed_offset8 as i16);
+                    let maybe_invalid = (ctx.pc() & 0xFF00) | (new_pc & 0xFF);
+                    // regardless of whether the address is valid or not, we set the PC to it on this cycle:
+                    queue.push(MicroCycle::read_pc_set_pc(maybe_invalid));
+                    if new_pc != maybe_invalid {
+                        // the address was invalid! luckily we know what the valid address is, let's spend another cycle
+                        // fixing it!
+                        queue.push(MicroCycle::read_pc_set_pc(new_pc));
+                    }
+                    // then, stick a fork in us, we're done
+                    queue.push(MicroCycle::opcode_fetch());
+                } else {
+                    // branch not taken! next cycle is opcode fetch
+                    queue.push(MicroCycle::opcode_fetch())
+                }
+            }
+            AluOp::SetPc(new_pc) => ctx.set_pc(new_pc),
+        }
+        StepResult::Pending
+    }
+
+    fn address_of<C: MicroContext>(&self, latch: Latch, ctx: &C) -> u32 {
+        match latch {
+            Latch::Pc => ctx.pc() as u32,
+            Latch::Sp => ctx.stack_base() as u32 + ctx.sp() as u32,
+            Latch::Ea => self.ea,
+            Latch::EaLo => self.ea & 0xFF,
+            Latch::Ptr => self.ptr as u32,
+            Latch::PtrLo => (self.ptr & 0xFF) as u32,
+            _ => unimplemented!("{latch:?}"),
         }
     }
 
-    fn resolve_memloc<C: MicroContext>(
-        &mut self,
-        ctx: &mut C,
-        loc: super::memory::MemLoc,
-    ) -> (u32, bool, bool) {
-        use super::memory::MemLoc;
-        match loc {
-            MemLoc::Pc => (ctx.pc() as u32, false, true),
-            MemLoc::PcInc => {
-                let addr = ctx.pc();
-                ctx.inc_pc();
-                (addr as u32, false, true)
-            }
-            MemLoc::Ea => {
-                let bank = (ctx.data_bank() as u32) << 16;
-                (bank | (self.ea as u32 & 0xFFFF), true, false)
-            }
-            MemLoc::Ptr8 => {
-                let base = ctx.direct_page_base();
-                let addr = base.wrapping_add((self.ptr & 0x00FF) as u16);
-                (addr as u32, true, false)
-            }
-            MemLoc::Ptr8Inc => {
-                let base = ctx.direct_page_base();
-                let low = (self.ptr & 0x00FF) as u8;
-                let addr = base.wrapping_add(low as u16);
-                // for Ptr8 we just wrap around the low byte
-                self.ptr = (self.ptr & 0xFF00) | (low.wrapping_add(1) as u16);
-                (addr as u32, true, false)
-            }
-            MemLoc::Sp => {
-                let addr = (ctx.stack_base() as u32) | (ctx.sp() as u32);
-                (addr, true, false)
-            }
-            MemLoc::Const(loc) => (loc as u32, true, false),
+    fn add_offset<C: MicroContext>(&mut self, ctx: &mut C, latch: Latch, offset: u16) {
+        let add_lo =
+            |v: u16, o: u16| -> u16 { (v & 0xFF00) | (v as u8).wrapping_add(o as u8) as u16 };
+        let add_hi = |v: u16, o: u16| -> u16 {
+            (((v >> 8) as u8).wrapping_add(o as u8) as u16) << 8 | (ctx.pc() & 0xFF)
+        };
+        let pc = ctx.pc();
+        let ea_bank = self.ea & 0xFF0000;
+        let ea = self.ea as u16;
+        match latch {
+            Latch::Pc => ctx.set_pc(pc.wrapping_add(offset)),
+            Latch::PcLo => ctx.set_pc(add_lo(pc, offset)),
+            Latch::PcHi => ctx.set_pc(add_hi(pc, offset)),
+            Latch::Ea => self.ea = self.ea.wrapping_add(offset as u32),
+            Latch::EaLo => self.ea = ea_bank | add_lo(ea, offset) as u32,
+            Latch::EaHi => self.ea = ea_bank | add_hi(ea, offset) as u32,
+            Latch::Ptr => self.ptr = self.ptr.wrapping_add(offset),
+            Latch::PtrLo => self.ptr = add_lo(self.ptr, offset),
+            Latch::PtrHi => self.ptr = add_hi(self.ptr, offset),
+            Latch::Sp => ctx.set_sp(ctx.sp().wrapping_add(offset as u8)),
+            _ => unimplemented!("{latch:?}"),
         }
     }
 
-    fn write_latch<C: MicroContext>(
-        &mut self,
-        ctx: &mut C,
-        latch: super::memory::Latch,
-        value: u8,
-    ) {
-        use super::memory::Latch::*;
+    fn write_latch<C: MicroContext>(&mut self, ctx: &mut C, latch: super::Latch, value: u8) {
+        use super::Latch::*;
         match latch {
             None => {}
             Ea => {
                 self.ea = (self.ea & !0xFFFF) | value as u32;
             }
             EaLo => {
-                self.ea = (self.ea & 0xFF00) | value as u32;
+                self.ea = (self.ea & !0xFF) | value as u32;
             }
             EaHi => {
-                self.ea = (self.ea & 0x00FF) | ((value as u32) << 8);
+                self.ea = (self.ea & !0xFF00) | ((value as u32) << 8);
             }
             Op0 => self.op0 = value,
             Ptr => self.ptr = value as u16,
@@ -466,27 +273,9 @@ impl MicroExecutor {
             }
             PcLo => ctx.set_pc_lo(value),
             PcHi => ctx.set_pc_hi(value),
+            Sp => ctx.set_sp(value),
             Status => ctx.set_status(value),
             SignedOffset8 => self.signed_offset8 = value as i8,
-        }
-    }
-
-    fn read_latch<C: MicroContext>(&self, ctx: &C, latch: super::memory::Latch) -> u8 {
-        use super::memory::Latch::*;
-        match latch {
-            None => 0,
-            Ea => (self.ea & 0xFF) as u8,
-            EaLo => (self.ea & 0xFF) as u8,
-            EaHi => ((self.ea >> 8) & 0xFF) as u8,
-            Op0 => self.op0,
-            Ptr => self.ptr as u8,
-            PtrLo => (self.ptr & 0xFF) as u8,
-            PtrHi => (self.ptr >> 8) as u8,
-            Pc => ctx.pc() as u8,
-            PcLo => ctx.pc() as u8,
-            PcHi => (ctx.pc() >> 8) as u8,
-            Status => ctx.status(),
-            SignedOffset8 => self.signed_offset8 as u8,
         }
     }
 }

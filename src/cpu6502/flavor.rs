@@ -6,6 +6,11 @@
 
 #![allow(dead_code)]
 
+use crate::isa::{
+    Latch, OffsetType,
+    microcycle::{AluOp, BusCycle, DecodeContext, MicroCode, MicroCycle, UcycQueue},
+};
+
 /// Decimal (BCD) arithmetic semantics used by ADC/SBC when the D flag is set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DecimalSemantics {
@@ -22,6 +27,9 @@ pub enum DecimalSemantics {
 /// All associated constants are used to **select code paths at compile time**, not at
 /// runtime. The compiler will inline and DCE (dead‑code‑eliminate) unused branches.
 pub trait Flavor {
+    type Micro: MicroCode;
+    fn microcode(&self) -> &Self::Micro;
+
     /// Human‑readable name for logs and asserts.
     const NAME: &'static str;
 
@@ -51,16 +59,85 @@ pub trait Flavor {
     }
 }
 
+pub struct Micro6502;
+impl MicroCode for Micro6502 {
+    /// The infamous NMOS6502 JMP (IND) wraparound bug!
+    ///
+    /// When the low byte of the jmp pointer is on a page boundary, i.e. xxFF, the high byte
+    /// is fetched from xx00, i.e., the same page as the low byte, rather than xy00.
+    ///
+    /// note: we don't need to deal with OffsetType as it is always None: there is no
+    /// such thing as JMP IND,X on the NMOS6502. It was introduced on the CMOS variants
+    fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext, _offset: OffsetType) {
+        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
+        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
+        // read Ptr, but instead of automatically incrementing it (which would result in the
+        // correct high byte address), we use the custom AluOp to just increment PtrLo instead:
+        queue.push(MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Ptr,
+                vda: true, // 6502 doesnt have vda/vpa who cares
+                vpa: false,
+                read: true,
+            },
+            inc_src: false, // would be 16-bit inc, because src is 16-bit Latch::Ptr
+            copy_to: Latch::PcLo,
+            alu: AluOp::IncLatch(Latch::PtrLo), // wraps around on Lo byte, does not affect Hi
+        });
+        queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
+        queue.push(MicroCycle::opcode_fetch());
+    }
+}
+
+pub struct Micro65C02;
+impl MicroCode for Micro65C02 {
+    /// The CMOS65C02 JMP (IND) bugfix!
+    ///
+    /// The bugfix results in correct page for the pointer high byte, at the cost of
+    /// one extra cycle: both JMP (IND) and JMP (IND),X take six cycles
+    fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext, offset: OffsetType) {
+        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
+        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
+        // dummy read while adding offset:
+        queue.push(MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Pc,
+                vda: false,
+                vpa: true,
+                read: true,
+            },
+            inc_src: false,
+            copy_to: Latch::None,
+            alu: AluOp::AddOffset {
+                latch: Latch::Ptr,
+                offset,
+            },
+        });
+        queue.push(MicroCycle::read(Latch::Ptr, Latch::PcLo, true));
+        queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
+        queue.push(MicroCycle::opcode_fetch());
+    }
+}
+
+pub struct MicroNES;
+impl MicroCode for MicroNES {}
+
+pub static MICRO_6502: Micro6502 = Micro6502;
+pub static MICRO_65C02: Micro65C02 = Micro65C02;
+pub static MICRO_NES: MicroNES = MicroNES;
+
 /// Marker for the original NMOS 6502.
 pub enum NMOS6502 {}
 /// Marker for the baseline CMOS 65C02 (without Rockwell extensions).
 pub enum CMOS65C02 {}
-/// Marker for a 65C02 with Rockwell bit‑ops enabled.
-pub enum Rockwell65C02 {}
 /// Marker for NES CPU Ricoh 2A03/2A07, with BCD nonsense removed
 pub enum NES {}
 
 impl Flavor for NMOS6502 {
+    type Micro = Micro6502;
+    fn microcode(&self) -> &'static Self::Micro {
+        &MICRO_6502
+    }
     const NAME: &'static str = "NMOS6502";
     const DECIMAL: DecimalSemantics = DecimalSemantics::Nmos6502;
     const JMP_INDIRECT_WRAP_BUG: bool = true;
@@ -72,6 +149,10 @@ impl Flavor for NMOS6502 {
 }
 
 impl Flavor for CMOS65C02 {
+    type Micro = Micro65C02;
+    fn microcode(&self) -> &'static Self::Micro {
+        &MICRO_65C02
+    }
     const NAME: &'static str = "CMOS65C02";
     const DECIMAL: DecimalSemantics = DecimalSemantics::Cmos65C02;
     const JMP_INDIRECT_WRAP_BUG: bool = false; // fixed on CMOS
@@ -79,21 +160,14 @@ impl Flavor for CMOS65C02 {
     const HAS_BRA: bool = true;
     const HAS_STZ: bool = true;
     const HAS_WAI_STP: bool = true;
-    const HAS_ROCKWELL_OPS: bool = false;
-}
-
-impl Flavor for Rockwell65C02 {
-    const NAME: &'static str = "Rockwell65C02";
-    const DECIMAL: DecimalSemantics = DecimalSemantics::Cmos65C02;
-    const JMP_INDIRECT_WRAP_BUG: bool = false;
-    const RMW_DUMMY_WRITE: bool = false;
-    const HAS_BRA: bool = true;
-    const HAS_STZ: bool = true;
-    const HAS_WAI_STP: bool = true;
-    const HAS_ROCKWELL_OPS: bool = false;
+    const HAS_ROCKWELL_OPS: bool = true;
 }
 
 impl Flavor for NES {
+    type Micro = MicroNES;
+    fn microcode(&self) -> &'static Self::Micro {
+        &MICRO_NES
+    }
     const NAME: &'static str = "Ricoh 2A03/2A07";
     const DECIMAL: DecimalSemantics = DecimalSemantics::None;
     const JMP_INDIRECT_WRAP_BUG: bool = true;

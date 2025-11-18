@@ -57,10 +57,10 @@ impl Harness {
 
 impl Bus for Harness {
     fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> (u8, WaitStates) {
-        println!("read access at {addr:#04X}");
         let access_type = AccessType::Read;
         let addr16 = addr as u16;
         let data = self.mem[addr16 as usize];
+        println!("read access at {addr:#04X} | data = {data:#04X}");
         let wait = *self.wait_map.get(&addr16).unwrap_or(&0);
         self.log.push(Access {
             cycle: self.cycle,
@@ -74,7 +74,7 @@ impl Bus for Harness {
     }
 
     fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) -> WaitStates {
-        //println!("read access at {addr:#04X}");
+        println!("write access at {addr:#04X}");
         let access_type = AccessType::Write;
         let addr16 = addr as u16;
         self.mem[addr16 as usize] = data;
@@ -189,10 +189,10 @@ fn run_instruction<F: Flavor>(
 mod mem_cycle_accuracy {
     use super::*;
     use crate::cpu6502::Cpu6502;
-    use crate::cpu6502::flavor::{NMOS6502, Rockwell65C02};
+    use crate::cpu6502::flavor::{CMOS65C02, NMOS6502};
     use crate::psr;
 
-    fn setup_6502(addr: u16, program: &[u8]) -> (Cpu6502<NMOS6502, Harness>, Harness) {
+    fn setup_nmos(addr: u16, program: &[u8]) -> (Cpu6502<NMOS6502, Harness>, Harness) {
         let mut bus = Harness::with_program(addr, program);
         let mut cpu = Cpu6502::<NMOS6502, Harness>::new();
 
@@ -202,9 +202,9 @@ mod mem_cycle_accuracy {
         (cpu, bus)
     }
 
-    fn setup_rockwell(addr: u16, program: &[u8]) -> (Cpu6502<Rockwell65C02, Harness>, Harness) {
+    fn setup_cmos(addr: u16, program: &[u8]) -> (Cpu6502<CMOS65C02, Harness>, Harness) {
         let mut bus = Harness::with_program(addr, program);
-        let mut cpu = Cpu6502::<Rockwell65C02, Harness>::new();
+        let mut cpu = Cpu6502::<CMOS65C02, Harness>::new();
 
         cpu.reset(&mut bus);
         bus.clear_log(); // ignore reset-vector reads
@@ -215,7 +215,7 @@ mod mem_cycle_accuracy {
     #[test]
     fn imp_asl() {
         // A/S/L?????
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x0A, 0xEA]); // ASL A; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x0A, 0xEA]); // ASL A; NOP
         cpu.a = 0b1001_1100; // some random bits to see if they rotate
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 2, "ASL IMM should be 2 cycles");
@@ -235,7 +235,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn imm_ldy() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xA0, 0x42, 0xEA]); // LDY #$42; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xA0, 0x42, 0xEA]); // LDY #$42; NOP
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 2, "LDY # should be 2 cycles");
         assert_eq!(cpu.y, 0x42);
@@ -253,7 +253,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn zp_sty() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x84, 0xAB, 0xEA]); // STY $AB; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x84, 0xAB, 0xEA]); // STY $AB; NOP
         cpu.y = 0x77;
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 3, "STY ZP should take 3 cycles");
@@ -273,7 +273,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn zp_x_cmp() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xD5, 0x62, 0xEA]); // CMP $62,X; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xD5, 0x62, 0xEA]); // CMP $62,X; NOP
         bus.mem[0x62] = 0x66; // not the byte we are addressing
         bus.mem[0x65] = 0x88; // this is the correct byte
         cpu.x = 0x03; // add 0x03 to 0x62 to get our effective address
@@ -298,7 +298,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn ind_x_eor() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x41, 0x62, 0xEA]); // EOR ($62, X); NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x41, 0x62, 0xEA]); // EOR ($62, X); NOP
         bus.mem[0x62] = 0xFF; // not the byte we are addressing
         bus.mem[0x65] = 0xEF; // low byte
         bus.mem[0x66] = 0xBE; // high byte
@@ -327,7 +327,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn ind_x_zp_wrap_ora() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x01, 0x62, 0xEA]); // ORA ($62, X); NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x01, 0x62, 0xEA]); // ORA ($62, X); NOP
         bus.mem[0x62] = 0xFF; // not the byte we are addressing
         bus.mem[0x60] = 0xEF; // low byte
         bus.mem[0x61] = 0xBE; // high byte
@@ -355,7 +355,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn ind_y_no_wrap_ldy() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xB1, 0x62, 0xEA]); // LDA ($62),Y; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xB1, 0x62, 0xEA]); // LDA ($62),Y; NOP
         bus.mem[0x62] = 0xEA; // low byte of address
         bus.mem[0x63] = 0xBE; // high byte of address
         bus.mem[0xBEEF] = 0x42; // final byte we want
@@ -383,7 +383,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn ind_y_wrap_lda() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xB1, 0x62, 0xEA]); // LDA ($62),Y; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xB1, 0x62, 0xEA]); // LDA ($62),Y; NOP
         bus.mem[0x62] = 0xF0; // low byte of address
         bus.mem[0x63] = 0xBD; // high byte of address
         bus.mem[0xBDEF] = 0xAA; // bad read at invalid address
@@ -412,8 +412,8 @@ mod mem_cycle_accuracy {
     }
 
     #[test]
-    fn indirect_y_no_wrap_sta() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x91, 0x62, 0xEA]); // STA ($62),Y; NOP
+    fn ind_y_no_wrap_sta() {
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x91, 0x62, 0xEA]); // STA ($62),Y; NOP
         bus.mem[0x62] = 0xEA; // low byte of address
         bus.mem[0x63] = 0xBE; // high byte of address
         bus.mem[0xBEEF] = 0x42; // final byte we want
@@ -441,7 +441,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn abs_and() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x2D, 0xEF, 0xBE, 0xEA]); // AND $BEEF; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x2D, 0xEF, 0xBE, 0xEA]); // AND $BEEF; NOP
         bus.mem[0xBEEF] = 0b1100_0011; // bit pattern to be anded to accumulator
         cpu.a = 0b0101_0101;
         let expected = 0b0100_0001;
@@ -464,7 +464,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn abs_y_ldx() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xBE, 0xEE, 0xBE, 0xEA]); // LDX $BEEF,Y; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xBE, 0xEE, 0xBE, 0xEA]); // LDX $BEEF,Y; NOP
         bus.mem[0xBEEE] = 0x13; // not the correct address
         bus.mem[0xBEEF] = 0x26; // here's the correct address
         cpu.y = 0x01; // add to address
@@ -488,7 +488,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn stack_pla() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x68, 0xEA]); // PHA; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x68, 0xEA]); // PHA; NOP
         cpu.s = 0xFE;
         bus.mem[0x01FE] = 0x65;
         bus.mem[0x01FF] = 0x78;
@@ -511,7 +511,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn stack_pha() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x48, 0xEA]); // PHA; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x48, 0xEA]); // PHA; NOP
         cpu.s = 0xFF;
         cpu.a = 0x78;
         let trace = run_instruction(&mut cpu, &mut bus);
@@ -532,7 +532,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn zp_rmw_inc() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xE6, 0x08, 0xEA]); // INC $08; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xE6, 0x08, 0xEA]); // INC $08; NOP
         bus.mem[0x08] = 0xA0;
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 5, "SMB0 (rmw) should take 5 cycles");
@@ -553,7 +553,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn smb4_rmw() {
-        let (mut cpu, mut bus) = setup_rockwell(0x8000, &[0xC7, 0x08, 0xEA]); // SMB4 $08; NOP
+        let (mut cpu, mut bus) = setup_cmos(0x8000, &[0xC7, 0x08, 0xEA]); // SMB4 $08; NOP
         bus.mem[0x08] = 0xA0;
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 5, "SMB0 (rmw) should take 5 cycles");
@@ -574,7 +574,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn rel_take_beq() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xF0, 0x10, 0xEA]); // BEQ #$10; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xF0, 0x10, 0xEA]); // BEQ #$10; NOP
         cpu.p |= psr::Z; // make sure Z is set
         bus.mem[0x8012] = 0xE8; // INX
         let trace = run_instruction(&mut cpu, &mut bus);
@@ -599,7 +599,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn rel_take_back_bmi() {
-        let (mut cpu, mut bus) = setup_6502(0x8060, &[0x30, 0xF0, 0xEA]); // BMI #$-10; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8060, &[0x30, 0xF0, 0xEA]); // BMI #$-10; NOP
         cpu.p |= psr::N; // make sure Z is set
         bus.mem[0x8052] = 0xE8; // INX
         let trace = run_instruction(&mut cpu, &mut bus);
@@ -624,7 +624,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn rel_take_cross_page_bvc() {
-        let (mut cpu, mut bus) = setup_6502(0x80F0, &[0x50, 0x10, 0xEA]); // BVC #$10; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x80F0, &[0x50, 0x10, 0xEA]); // BVC #$10; NOP
         cpu.p &= !psr::V; // make sure V is clear
         bus.mem[0x8002] = 0x78; // junk data at wrong address
         bus.mem[0x8102] = 0xE8; // INX
@@ -651,7 +651,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn rel_take_back_cross_page_bcc() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x90, 0xF0, 0xEA]); // BCC #$-10; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x90, 0xF0, 0xEA]); // BCC #$-10; NOP
         cpu.p &= !psr::C; // make sure C is clear
         bus.mem[0x80F2] = 0x78; // junk data at wrong address
         bus.mem[0x7FF2] = 0xE8; // INX
@@ -678,7 +678,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn rel_no_take_bcs() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0xB0, 0xF0, 0xEA]); // BCC #$-10; NOP
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0xB0, 0xF0, 0xEA]); // BCC #$-10; NOP
         cpu.p &= !psr::C; // make sure C is clear
         bus.mem[0x80F2] = 0x78; // junk data at wrong address
         bus.mem[0x7FF2] = 0xE8; // INX
@@ -701,7 +701,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn zprel_take_bbs2() {
-        let (mut cpu, mut bus) = setup_rockwell(0x8000, &[0xAF, 0x42, 0x10, 0xEA]); // BBS2 #$10; NOP
+        let (mut cpu, mut bus) = setup_cmos(0x8000, &[0xAF, 0x42, 0x10, 0xEA]); // BBS2 #$10; NOP
         bus.mem[0x0042] = 0x3C; // bit 2 of this is set
         bus.mem[0x8013] = 0xE8; // INX
         let trace = run_instruction(&mut cpu, &mut bus);
@@ -726,7 +726,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn jmpabs() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x4C, 0x69, 0x80]); // JMP $8069
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x4C, 0x69, 0x80]); // JMP $8069
         bus.mem[0x8069] = 0xEA; // NOP
         let trace = run_instruction(&mut cpu, &mut bus);
         assert_eq!(trace.cycles, 3, "JMP ABS should take 3 cycles");
@@ -745,7 +745,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn jmpind_normal() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x6C, 0x69, 0x80]); // JMP ($8069)
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x6C, 0x69, 0x80]); // JMP ($8069)
         bus.mem[0x8069] = 0xEF;
         bus.mem[0x806A] = 0xBE;
         bus.mem[0xBEEF] = 0xEA;
@@ -768,7 +768,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn jmpind_wrap_bug() {
-        let (mut cpu, mut bus) = setup_6502(0x8000, &[0x6C, 0xFF, 0x80]); // JMP ($80FF)
+        let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x6C, 0xFF, 0x80]); // JMP ($80FF)
         bus.mem[0x80FF] = 0xEF;
         bus.mem[0x8100] = 0xBE;
         bus.mem[0xBEEF] = 0xEA;
@@ -792,7 +792,7 @@ mod mem_cycle_accuracy {
 
     #[test]
     fn jmpind_wrap_fix() {
-        let (mut cpu, mut bus) = setup_rockwell(0x8000, &[0x6C, 0xFF, 0x80]); // JMP ($80FF)
+        let (mut cpu, mut bus) = setup_cmos(0x8000, &[0x6C, 0xFF, 0x80]); // JMP ($80FF)
         bus.mem[0x80FF] = 0xEF;
         bus.mem[0x8100] = 0xBE;
         bus.mem[0xBEEF] = 0xEA;
