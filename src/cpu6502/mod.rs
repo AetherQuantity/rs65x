@@ -558,19 +558,4 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
             }
         }
     }
-
-    fn alu_push_value(&mut self, _scratch: &mut MicroExecutor) -> u8 {
-        use Mnemonic::*;
-        match self.mnemonic() {
-            Pha => *self.a,
-            Php => {
-                let mut value = *self.status;
-                value |= psr::B_6502 | psr::U_6502;
-                value
-            }
-            Phx => *self.x,
-            Phy => *self.y,
-            other => panic!("AluPush requested for unsupported mnemonic {:?}", other),
-        }
-    }
 }

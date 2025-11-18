@@ -817,4 +817,53 @@ mod mem_cycle_accuracy {
         trace.assert_accesses(accesses);
         trace.assert_prefetch(prefetch);
     }
+
+    #[test]
+    fn jmpind_normal_cmos() {
+        let (mut cpu, mut bus) = setup_cmos(0x8000, &[0x6C, 0x69, 0x80]); // JMP ($8069)
+        bus.mem[0x8069] = 0xEF;
+        bus.mem[0x806A] = 0xBE;
+        bus.mem[0xBEEF] = 0xEA;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 6, "JMP IND should take 6 cycles on CMOS");
+        assert_eq!(cpu.pc, 0xBEF0);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x6C),
+            Access::basic_read(0x8001, 0x69),
+            Access::basic_read(0x8002, 0x80),
+            Access::basic_read(0x8002, 0x80),
+            Access::basic_read(0x8069, 0xEF),
+            Access::basic_read(0x806A, 0xBE),
+        ];
+        let prefetch = Access::basic_read(0xBEEF, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn jmpindx() {
+        let (mut cpu, mut bus) = setup_cmos(0x8000, &[0x7C, 0x69, 0x80]); // JMP ($8069)
+        bus.mem[0x806E] = 0xEF;
+        bus.mem[0x806F] = 0xBE;
+        bus.mem[0xBEEF] = 0xEA;
+        cpu.x = 0x5;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 6, "JMP IND should take 6 cycles on CMOS");
+        assert_eq!(cpu.pc, 0xBEF0);
+
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x7C),
+            Access::basic_read(0x8001, 0x69),
+            Access::basic_read(0x8002, 0x80),
+            Access::basic_read(0x8002, 0x80),
+            Access::basic_read(0x806E, 0xEF),
+            Access::basic_read(0x806F, 0xBE),
+        ];
+        let prefetch = Access::basic_read(0xBEEF, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
 }

@@ -81,9 +81,6 @@ pub trait MicroContext {
 
     /// Evaluate a branch, returning whether the branch was taken
     fn alu_branch(&mut self, scratch: &mut MicroExecutor, queue: &mut UcycQueue) -> bool;
-
-    /// Produce the value to be pushed onto the stack for stack-write instructions.
-    fn alu_push_value(&mut self, scratch: &mut MicroExecutor) -> u8;
 }
 
 impl MicroExecutor {

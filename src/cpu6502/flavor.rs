@@ -50,13 +50,6 @@ pub trait Flavor {
 
     /// Rockwell bit manipulation extensions.
     const HAS_ROCKWELL_OPS: bool; // RMB, SMB, BBR, BBS: setting, resetting, and testing bits in zp
-
-    /// Branch penalty model: +1 cycle if branch taken, +1 if page boundary crossed.
-    /// Many real cores follow this, but flavors can override if needed.
-    #[inline(always)]
-    fn branch_penalty(taken: bool, page_cross: bool) -> u8 {
-        (taken as u8) + (page_cross as u8)
-    }
 }
 
 pub struct Micro6502;
@@ -67,7 +60,7 @@ impl MicroCode for Micro6502 {
     /// is fetched from xx00, i.e., the same page as the low byte, rather than xy00.
     ///
     /// note: we don't need to deal with OffsetType as it is always None: there is no
-    /// such thing as JMP IND,X on the NMOS6502. It was introduced on the CMOS variants
+    /// such thing as JMP (IND,X) on the NMOS6502. It was introduced on the CMOS variants
     fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext, _offset: OffsetType) {
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
@@ -94,7 +87,7 @@ impl MicroCode for Micro65C02 {
     /// The CMOS65C02 JMP (IND) bugfix!
     ///
     /// The bugfix results in correct page for the pointer high byte, at the cost of
-    /// one extra cycle: both JMP (IND) and JMP (IND),X take six cycles
+    /// one extra cycle: both JMP (IND) and JMP (IND,X) take six cycles
     fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext, offset: OffsetType) {
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
@@ -118,13 +111,8 @@ impl MicroCode for Micro65C02 {
         queue.push(MicroCycle::opcode_fetch());
     }
 }
-
-pub struct MicroNES;
-impl MicroCode for MicroNES {}
-
 pub static MICRO_6502: Micro6502 = Micro6502;
 pub static MICRO_65C02: Micro65C02 = Micro65C02;
-pub static MICRO_NES: MicroNES = MicroNES;
 
 /// Marker for the original NMOS 6502.
 pub enum NMOS6502 {}
@@ -164,9 +152,9 @@ impl Flavor for CMOS65C02 {
 }
 
 impl Flavor for NES {
-    type Micro = MicroNES;
+    type Micro = Micro6502;
     fn microcode(&self) -> &'static Self::Micro {
-        &MICRO_NES
+        &MICRO_6502
     }
     const NAME: &'static str = "Ricoh 2A03/2A07";
     const DECIMAL: DecimalSemantics = DecimalSemantics::None;
