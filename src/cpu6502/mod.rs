@@ -238,9 +238,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             DecimalSemantics::Cmos65C02 => {
                 self.finish_adc_decimal_cmos(binary, adjust);
             }
-            DecimalSemantics::None => {
-                self.finish_adc_binary(binary);
-            }
+            DecimalSemantics::None => unreachable!(),
         }
     }
 
@@ -279,12 +277,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     #[inline(always)]
-    fn decimal_adjust_add(
-        acc: u8,
-        operand: u8,
-        carry_in: bool,
-        sum: u16,
-    ) -> DecimalAdjustResult {
+    fn decimal_adjust_add(acc: u8, operand: u8, carry_in: bool, sum: u16) -> DecimalAdjustResult {
         let carry = u8::from(carry_in) as u16;
         let low_sum = (acc & 0x0F) as u16 + (operand & 0x0F) as u16 + carry;
         let mut adjusted = sum;
