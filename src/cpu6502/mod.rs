@@ -11,6 +11,7 @@ pub mod tests;
 use core::marker::PhantomData;
 
 use crate::bus::Bus;
+use crate::isa::JumpType;
 use crate::isa::microcycle::{DecodeContext, UcycQueue};
 use crate::isa::op::{MicroContext, MicroExecutor, StepResult};
 use crate::isa::table::{Instruction, Mnemonic};
@@ -140,7 +141,9 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             Adc => {
                 self.execute_adc(read);
             }
-            Sbc => todo!(),
+            Sbc => {
+                self.execute_sbc(read);
+            }
             Cmp | Cpx | Cpy => {
                 let byte = match op {
                     Cmp => self.a,
@@ -153,12 +156,16 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 self.alu_set_flag(psr::C, byte >= read);
             }
             Pla | Plx | Ply => match op {
-                Pla => self.a = read,
-                Plx => self.x = read,
-                Ply => self.y = read,
+                Pla => self.a = self.alu_set_zn(read),
+                Plx => self.x = self.alu_set_zn(read),
+                Ply => self.y = self.alu_set_zn(read),
                 _ => unreachable!(),
             },
-            Bit => todo!(),
+            Bit => {
+                let status = self.p & !(psr::Z | psr::N | psr::V);
+                let z = psr::Z * if self.a & read == 0 { 1 } else { 0 };
+                self.p = status | z | (read & 0xC0);
+            }
             _ => {}
         }
     }
@@ -170,6 +177,23 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             Lsr => self.a = self.alu_lsr(self.a),
             Rol => self.a = self.alu_rol(self.a),
             Ror => self.a = self.alu_ror(self.a),
+            Clc => self.p &= !psr::C,
+            Cld => self.p &= !psr::D,
+            Cli => self.p &= !psr::I,
+            Clv => self.p &= !psr::V,
+            Sec => self.p |= psr::C,
+            Sed => self.p |= psr::D,
+            Sei => self.p |= psr::I,
+            Dex => self.x = self.x.wrapping_sub(1),
+            Dey => self.y = self.y.wrapping_sub(1),
+            Inx => self.x = self.x.wrapping_add(1),
+            Iny => self.y = self.y.wrapping_add(1),
+            Tax => self.x = self.alu_set_zn(self.a),
+            Tay => self.y = self.alu_set_zn(self.a),
+            Tsx => self.x = self.alu_set_zn(self.s),
+            Txa => self.a = self.alu_set_zn(self.x),
+            Tya => self.a = self.alu_set_zn(self.y),
+            Txs => self.s = self.x, // don't set Z/N
             _ => {}
         }
     }
@@ -205,11 +229,14 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             if instruction.memory_action == crate::isa::MemoryAction::Read {
                 self.finish_read(instruction.mnemonic);
             }
-            if matches!(
-                instruction.address_mode,
-                AddressMode::NoMemory(NoMemType::Implied)
-            ) {
-                self.finish_implied(instruction.mnemonic);
+            match instruction.address_mode {
+                AddressMode::NoMemory(NoMemType::Implied) => {
+                    self.finish_implied(instruction.mnemonic)
+                }
+                AddressMode::Jump(JumpType::ToInterrupt) => {
+                    self.p |= psr::I;
+                }
+                _ => (),
             }
             // the instruction finishes here, but we need to read the next opcode for next cycle
             let opcode = self.fetch_opcode(bus);
@@ -244,10 +271,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
 
     #[inline(always)]
     fn finish_adc_binary(&mut self, binary: BinaryAddResult) {
-        self.a = binary.result;
-        self.alu_set_flag(psr::C, binary.carry);
-        self.alu_set_flag(psr::V, binary.overflow);
-        self.alu_set_zn(binary.result);
+        self.finish_binary_result(binary.result, binary.carry, binary.overflow);
     }
 
     #[inline(always)]
@@ -256,7 +280,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         acc: u8,
         operand: u8,
         binary: BinaryAddResult,
-        adjust: DecimalAdjustResult,
+        adjust: DecimalAddAdjust,
     ) {
         self.a = adjust.result();
         self.alu_set_flag(psr::C, adjust.carry());
@@ -267,7 +291,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     #[inline(always)]
-    fn finish_adc_decimal_cmos(&mut self, binary: BinaryAddResult, adjust: DecimalAdjustResult) {
+    fn finish_adc_decimal_cmos(&mut self, binary: BinaryAddResult, adjust: DecimalAddAdjust) {
         let result = adjust.result();
         self.a = result;
         self.alu_set_flag(psr::C, adjust.carry());
@@ -277,7 +301,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     #[inline(always)]
-    fn decimal_adjust_add(acc: u8, operand: u8, carry_in: bool, sum: u16) -> DecimalAdjustResult {
+    fn decimal_adjust_add(acc: u8, operand: u8, carry_in: bool, sum: u16) -> DecimalAddAdjust {
         let carry = u8::from(carry_in) as u16;
         let low_sum = (acc & 0x0F) as u16 + (operand & 0x0F) as u16 + carry;
         let mut adjusted = sum;
@@ -288,7 +312,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         if adjusted > 0x99 {
             adjusted = adjusted.wrapping_add(0x60);
         }
-        DecimalAdjustResult {
+        DecimalAddAdjust {
             pre_high,
             result: adjusted as u8,
             carry: adjusted > 0xFF,
@@ -298,6 +322,92 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     #[inline(always)]
     fn adc_overflow(acc: u8, operand: u8, result: u8) -> bool {
         ((acc ^ result) & 0x80) != 0 && ((acc ^ operand) & 0x80) == 0
+    }
+
+    #[inline(always)]
+    fn execute_sbc(&mut self, operand: u8) {
+        let acc = self.a;
+        let carry_in = self.alu_carry();
+        let inverted = operand ^ 0xFF;
+        let binary = Self::binary_add(acc, inverted, carry_in);
+        let overflow = Self::sbc_overflow(acc, operand, binary.result);
+
+        if (self.p & psr::D) == 0 || matches!(F::DECIMAL, DecimalSemantics::None) {
+            self.finish_binary_result(binary.result, binary.carry, overflow);
+            return;
+        }
+
+        let adjust = Self::decimal_adjust_sub(acc, operand, carry_in, binary.result);
+        match F::DECIMAL {
+            DecimalSemantics::Nmos6502 => {
+                self.finish_sbc_decimal_nmos(binary, overflow, adjust);
+            }
+            DecimalSemantics::Cmos65C02 => {
+                self.finish_sbc_decimal_cmos(binary.carry, overflow, adjust);
+            }
+            DecimalSemantics::None => {
+                self.finish_binary_result(binary.result, binary.carry, overflow);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn finish_sbc_decimal_nmos(
+        &mut self,
+        binary: BinaryAddResult,
+        overflow: bool,
+        adjust: DecimalSubAdjust,
+    ) {
+        self.a = adjust.result();
+        self.alu_set_flag(psr::C, binary.carry);
+        self.alu_set_flag(psr::V, overflow);
+        self.alu_set_flag(psr::N, (binary.result & psr::N) != 0);
+        self.alu_set_flag(psr::Z, binary.result == 0);
+    }
+
+    #[inline(always)]
+    fn finish_sbc_decimal_cmos(&mut self, carry: bool, overflow: bool, adjust: DecimalSubAdjust) {
+        let result = adjust.result();
+        self.a = result;
+        self.alu_set_flag(psr::C, carry);
+        self.alu_set_flag(psr::V, overflow);
+        self.alu_set_flag(psr::Z, result == 0);
+        self.alu_set_flag(psr::N, (result & psr::N) != 0);
+    }
+
+    #[inline(always)]
+    fn decimal_adjust_sub(
+        acc: u8,
+        operand: u8,
+        carry_in: bool,
+        binary_result: u8,
+    ) -> DecimalSubAdjust {
+        let borrow = if carry_in { 0u16 } else { 1u16 };
+        let mut result = binary_result;
+        let low_acc = (acc & 0x0F) as u16;
+        let low_op = (operand & 0x0F) as u16;
+        if low_acc < low_op + borrow {
+            result = result.wrapping_sub(0x06);
+        }
+        let acc16 = acc as u16;
+        let op16 = operand as u16;
+        if acc16 < op16 + borrow {
+            result = result.wrapping_sub(0x60);
+        }
+        DecimalSubAdjust { result }
+    }
+
+    #[inline(always)]
+    fn sbc_overflow(acc: u8, operand: u8, result: u8) -> bool {
+        ((acc ^ operand) & (acc ^ result) & 0x80) != 0
+    }
+
+    #[inline(always)]
+    fn finish_binary_result(&mut self, result: u8, carry: bool, overflow: bool) {
+        self.a = result;
+        self.alu_set_flag(psr::C, carry);
+        self.alu_set_flag(psr::V, overflow);
+        self.alu_set_zn(result);
     }
 
     #[inline(always)]
@@ -328,13 +438,13 @@ struct BinaryAddResult {
 }
 
 #[derive(Clone, Copy)]
-struct DecimalAdjustResult {
+struct DecimalAddAdjust {
     pre_high: u8,
     result: u8,
     carry: bool,
 }
 
-impl DecimalAdjustResult {
+impl DecimalAddAdjust {
     #[inline(always)]
     fn result(self) -> u8 {
         self.result
@@ -348,6 +458,18 @@ impl DecimalAdjustResult {
     #[inline(always)]
     fn pre_high(self) -> u8 {
         self.pre_high
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DecimalSubAdjust {
+    result: u8,
+}
+
+impl DecimalSubAdjust {
+    #[inline(always)]
+    fn result(self) -> u8 {
+        self.result
     }
 }
 
@@ -367,9 +489,10 @@ trait AluOps {
     }
 
     #[inline(always)]
-    fn alu_set_zn(&mut self, value: u8) {
+    fn alu_set_zn(&mut self, value: u8) -> u8 {
         self.alu_set_flag(psr::Z, value == 0);
         self.alu_set_flag(psr::N, (value & psr::N) != 0);
+        value
     }
 
     #[inline(always)]
@@ -641,7 +764,7 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
             Stx | Phx => scratch.data_latch = *self.x,
             Sty | Phy => scratch.data_latch = *self.y,
             Stz => scratch.data_latch = 0,
-            Php => scratch.data_latch = *self.status,
+            Php => scratch.data_latch = *self.status | psr::B_6502,
             _ => {}
         }
     }

@@ -192,6 +192,7 @@ impl MicroExecutor {
             AluOp::Branch => {
                 if ctx.alu_branch(self, queue) {
                     // branch taken!
+                    println!("branch taken!");
                     // we need to figure out if we are branching to the same page or a different one
                     let new_pc = ctx.pc().wrapping_add_signed(self.signed_offset8 as i16);
                     let maybe_invalid = (ctx.pc() & 0xFF00) | (new_pc & 0xFF);
@@ -205,6 +206,7 @@ impl MicroExecutor {
                     // then, stick a fork in us, we're done
                     queue.push(MicroCycle::opcode_fetch());
                 } else {
+                    println!("branch not taken!");
                     // branch not taken! next cycle is opcode fetch
                     queue.push(MicroCycle::opcode_fetch())
                 }
@@ -281,7 +283,7 @@ impl MicroExecutor {
             PcHi => ctx.set_pc_hi(value),
             Sp => ctx.set_sp(value),
             Status => ctx.set_status(value),
-            BrkStatus => ctx.set_status(value | psr::I),
+            BrkStatus => ctx.set_status(value | psr::B_6502 | psr::U_6502),
             SignedOffset8 => self.signed_offset8 = value as i8,
         }
     }
@@ -300,7 +302,7 @@ impl MicroExecutor {
             PcHi => (ctx.pc() >> 8) as u8,
             Sp => ctx.sp(),
             Status => ctx.status(),
-            BrkStatus => ctx.status() | psr::I,
+            BrkStatus => ctx.status() | psr::B_6502 | psr::U_6502,
             SignedOffset8 => u8::from_le_bytes(self.signed_offset8.to_le_bytes()),
         }
     }
