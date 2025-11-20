@@ -219,6 +219,7 @@ impl fmt::Display for AddressMode {
 #[derive(Debug, Clone, Copy)]
 pub enum Latch {
     None,
+    Constant(u16),
     Pc,
     PcLo,
     PcHi,
@@ -231,6 +232,7 @@ pub enum Latch {
     PtrLo,
     PtrHi,
     Status,
+    BrkStatus,     // Status with interrupt flags
     SignedOffset8, // for branches
 }
 
@@ -248,17 +250,18 @@ impl AddressMode {
                 M::emit_jmpind(queue, ctx, OffsetType::None)
             }
             AddressMode::Jump(JumpType::JmpIndirectX) => M::emit_jmpind(queue, ctx, OffsetType::X),
-            AddressMode::Jump(JumpType::ToSubroutine) => todo!(),
-            AddressMode::Jump(JumpType::FromSubroutine) => todo!(),
-            AddressMode::Jump(JumpType::ToInterrupt) => todo!(),
-            AddressMode::Jump(JumpType::FromInterrupt) => todo!(),
-            AddressMode::Jump(JumpType::JmpIndirectLong) => todo!(),
+            AddressMode::Jump(JumpType::ToSubroutine) => M::emit_jsr(queue, ctx),
+            AddressMode::Jump(JumpType::FromSubroutine) => M::emit_rts(queue, ctx),
+            AddressMode::Jump(JumpType::ToInterrupt) => M::emit_brk(queue, ctx),
+            AddressMode::Jump(JumpType::FromInterrupt) => M::emit_rti(queue, ctx),
             AddressMode::Branch(BranchType::DpRelative) => M::emit_branch_dprel(queue, ctx),
             AddressMode::Branch(BranchType::Relative) => M::emit_branch_rel(queue, ctx),
+            // 16-bit only:
             AddressMode::Branch(BranchType::RelativeLong) => todo!(),
             AddressMode::AbsoluteLong(_offset_type) => todo!(),
             AddressMode::BlockMove => todo!(),
             AddressMode::StackRelative(_offset_type) => todo!(),
+            AddressMode::Jump(JumpType::JmpIndirectLong) => todo!(),
         }
     }
 }

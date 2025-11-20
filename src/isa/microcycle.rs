@@ -90,7 +90,7 @@ pub enum AluOp {
     NextOpcode,
     AddOffset { latch: Latch, offset: OffsetType },
     OffsetWithExtraCycle(OffsetType),
-    Push,
+    DecSp,
     Modify,
     JumpToEa,
     IncLatch(Latch),
@@ -102,7 +102,7 @@ pub enum AluOp {
 pub struct MicroCycle {
     pub bus: BusCycle,
     pub inc_src: bool,
-    pub copy_to: Latch,
+    pub local_latch: Latch,
     pub alu: AluOp,
 }
 
@@ -128,7 +128,7 @@ impl MicroCycle {
                 read: true,
             },
             inc_src: true,
-            copy_to: Latch::None,
+            local_latch: Latch::None,
             alu: AluOp::NextOpcode,
         }
     }
@@ -142,8 +142,34 @@ impl MicroCycle {
                 read: true,
             },
             inc_src,
-            copy_to: dest,
+            local_latch: dest,
             alu: AluOp::None,
+        }
+    }
+    pub const fn dummy_read(addr: Latch) -> Self {
+        MicroCycle {
+            bus: BusCycle {
+                addr,
+                vda: false, // on dummy reads, vda and vpa are 0
+                vpa: false,
+                read: true,
+            },
+            inc_src: false,
+            local_latch: Latch::None,
+            alu: AluOp::None,
+        }
+    }
+    pub const fn push(src: Latch) -> Self {
+        MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Sp,
+                vda: true,
+                vpa: false, // literally impossible for vpa to be true on write
+                read: false,
+            },
+            inc_src: false,
+            local_latch: src,
+            alu: AluOp::DecSp,
         }
     }
     pub const fn read_and_offset(src: Latch, offset: OffsetType) -> Self {
@@ -155,7 +181,7 @@ impl MicroCycle {
                 read: true,
             },
             inc_src: false,
-            copy_to: Latch::None,
+            local_latch: Latch::None,
             alu: AluOp::AddOffset { latch: src, offset },
         }
     }
@@ -168,7 +194,7 @@ impl MicroCycle {
                 read: true,
             },
             inc_src: false,
-            copy_to: Latch::None,
+            local_latch: Latch::None,
             alu: AluOp::SetPc(new_pc),
         }
     }
@@ -181,7 +207,7 @@ impl MicroCycle {
                 read: true,
             },
             inc_src: false,
-            copy_to: Latch::Op0,
+            local_latch: Latch::Op0,
             alu: AluOp::OffsetWithExtraCycle(offset_type),
         }
     }
@@ -194,7 +220,7 @@ impl MicroCycle {
                 read: false,
             },
             inc_src: false,
-            copy_to: Latch::None,
+            local_latch: Latch::None,
             alu: AluOp::None,
         }
     }
@@ -207,7 +233,7 @@ impl MicroCycle {
                 read,
             },
             inc_src: false,
-            copy_to: Latch::None,
+            local_latch: Latch::None,
             alu: AluOp::Modify,
         }
     }
@@ -220,8 +246,8 @@ impl MicroCycle {
                 read: false,
             },
             inc_src: false,
-            copy_to: Latch::None,
-            alu: AluOp::Push,
+            local_latch: Latch::None,
+            alu: AluOp::DecSp,
         }
     }
 }
@@ -279,7 +305,7 @@ pub trait MicroCode {
                     read: true,
                 },
                 inc_src: false,
-                copy_to: Latch::None,
+                local_latch: Latch::None,
                 alu: AluOp::AddOffset {
                     latch: Latch::PtrLo,
                     offset,
@@ -320,7 +346,7 @@ pub trait MicroCode {
                 read: true,
             },
             inc_src: true,
-            copy_to: Latch::EaHi,
+            local_latch: Latch::EaHi,
             alu: AluOp::JumpToEa,
         });
         queue.push(MicroCycle::opcode_fetch());
@@ -337,7 +363,7 @@ pub trait MicroCode {
                 read: true,
             },
             inc_src: false,
-            copy_to: Latch::PtrHi,
+            local_latch: Latch::PtrHi,
             alu: AluOp::AddOffset {
                 latch: Latch::Ptr,
                 offset,
@@ -345,6 +371,48 @@ pub trait MicroCode {
         });
         queue.push(MicroCycle::read(Latch::Ptr, Latch::PcLo, true));
         queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
+        queue.push(MicroCycle::opcode_fetch());
+    }
+
+    fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        queue.push(MicroCycle::read(Latch::Pc, Latch::EaLo, true));
+        queue.push(MicroCycle::read(Latch::Pc, Latch::EaHi, false));
+        // internal op:
+        queue.push(MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Pc,
+                vda: false,
+                vpa: false,
+                read: true,
+            },
+            inc_src: false,
+            local_latch: Latch::None,
+            alu: AluOp::JumpToEa, // ready for next opcode fetch!
+        });
+        // first have to push PC Hi and Lo to the stack though
+        queue.push(MicroCycle::push(Latch::PcHi));
+        queue.push(MicroCycle::push(Latch::PcLo));
+
+        // then, PC is already rarin to go
+        queue.push(MicroCycle::opcode_fetch());
+    }
+
+    fn emit_rts(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        queue.push(MicroCycle::dummy_read(Latch::Pc));
+        queue.push(MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Pc,
+                vda: false,
+                vpa: false,
+                read: true,
+            },
+            inc_src: false,
+            local_latch: Latch::None,
+            alu: AluOp::IncLatch(Latch::Sp), // pre-increment
+        });
+        queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
+        queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, true));
+        queue.push(MicroCycle::dummy_read(Latch::Sp));
         queue.push(MicroCycle::opcode_fetch());
     }
 
@@ -359,7 +427,7 @@ pub trait MicroCode {
                 read: true,
             },
             inc_src: true,
-            copy_to: Latch::SignedOffset8,
+            local_latch: Latch::SignedOffset8,
             alu: AluOp::Branch,
         });
         // either way, AluOp::Branch is going to add the rest of the cycles
@@ -376,9 +444,36 @@ pub trait MicroCode {
                 read: true,
             },
             inc_src: true,
-            copy_to: Latch::SignedOffset8,
+            local_latch: Latch::SignedOffset8,
             alu: AluOp::Branch,
         });
         // as above, AluOp::Branch fills out the queue from here
+    }
+
+    fn emit_brk(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        queue.push(MicroCycle::read(Latch::Pc, Latch::None, true));
+        queue.push(MicroCycle::push(Latch::PcHi));
+        queue.push(MicroCycle::push(Latch::PcLo));
+        queue.push(MicroCycle::push(Latch::BrkStatus));
+        queue.push(MicroCycle::read(
+            Latch::Constant(0xFFFE),
+            Latch::PcLo,
+            false,
+        ));
+        queue.push(MicroCycle::read(
+            Latch::Constant(0xFFFF),
+            Latch::PcHi,
+            false,
+        ));
+        queue.push(MicroCycle::opcode_fetch());
+    }
+
+    fn emit_rti(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        queue.push(MicroCycle::read(Latch::Pc, Latch::None, false));
+        queue.push(MicroCycle::read(Latch::Sp, Latch::None, true));
+        queue.push(MicroCycle::read(Latch::Sp, Latch::Status, true));
+        queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
+        queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, false));
+        queue.push(MicroCycle::opcode_fetch());
     }
 }

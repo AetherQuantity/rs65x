@@ -52,6 +52,39 @@ pub trait Flavor {
     const HAS_ROCKWELL_OPS: bool; // RMB, SMB, BBR, BBS: setting, resetting, and testing bits in zp
 }
 
+/// While the cycle count between the 816 and 6502 remain the same (6), the cycles actually happen in a
+/// different order!
+fn emit_jsr_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
+    queue.push(MicroCycle::read(Latch::Pc, Latch::EaLo, true));
+    // internal op:
+    queue.push(MicroCycle::read(Latch::Sp, Latch::None, false));
+    queue.push(MicroCycle::push(Latch::PcHi));
+    queue.push(MicroCycle::push(Latch::PcLo));
+    queue.push(MicroCycle {
+        bus: BusCycle {
+            addr: Latch::Pc,
+            vda: false,
+            vpa: true,
+            read: true,
+        },
+        inc_src: false,
+        local_latch: Latch::EaHi,
+        alu: AluOp::JumpToEa, // ready for next opcode fetch!
+    });
+    // then, PC is already rarin to go
+    queue.push(MicroCycle::opcode_fetch());
+}
+
+/// Slightly different dummy reads
+fn emit_rts_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
+    queue.push(MicroCycle::dummy_read(Latch::Pc));
+    queue.push(MicroCycle::read(Latch::Sp, Latch::None, true));
+    queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
+    queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, false));
+    queue.push(MicroCycle::read(Latch::Pc, Latch::None, true));
+    queue.push(MicroCycle::opcode_fetch());
+}
+
 pub struct Micro6502;
 impl MicroCode for Micro6502 {
     /// The infamous NMOS6502 JMP (IND) wraparound bug!
@@ -74,11 +107,19 @@ impl MicroCode for Micro6502 {
                 read: true,
             },
             inc_src: false, // would be 16-bit inc, because src is 16-bit Latch::Ptr
-            copy_to: Latch::PcLo,
+            local_latch: Latch::PcLo,
             alu: AluOp::IncLatch(Latch::PtrLo), // wraps around on Lo byte, does not affect Hi
         });
         queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
         queue.push(MicroCycle::opcode_fetch());
+    }
+
+    fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        emit_jsr_8bit(queue, _ctx);
+    }
+
+    fn emit_rts(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        emit_rts_8bit(queue, _ctx);
     }
 }
 
@@ -100,7 +141,7 @@ impl MicroCode for Micro65C02 {
                 read: true,
             },
             inc_src: false,
-            copy_to: Latch::None,
+            local_latch: Latch::None,
             alu: AluOp::AddOffset {
                 latch: Latch::Ptr,
                 offset,
@@ -109,6 +150,14 @@ impl MicroCode for Micro65C02 {
         queue.push(MicroCycle::read(Latch::Ptr, Latch::PcLo, true));
         queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
         queue.push(MicroCycle::opcode_fetch());
+    }
+
+    fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        emit_jsr_8bit(queue, _ctx);
+    }
+
+    fn emit_rts(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        emit_rts_8bit(queue, _ctx);
     }
 }
 pub static MICRO_6502: Micro6502 = Micro6502;

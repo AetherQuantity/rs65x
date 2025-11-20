@@ -10,6 +10,7 @@ use crate::{
         Latch, MemoryAction,
         microcycle::{AluOp, MicroCycle, UcycQueue},
     },
+    psr,
 };
 
 #[derive(Clone, Copy)]
@@ -73,8 +74,8 @@ pub trait MicroContext {
         false
     }
 
-    /// Prepare the value that should be written to memory for store-style instructions.
-    fn alu_prepare_store(&mut self, scratch: &mut MicroExecutor) -> u8;
+    /// Prepare the value that should be written to memory for store-style instructions, and store in data latch.
+    fn alu_prepare_store(&mut self, scratch: &mut MicroExecutor);
 
     /// Execute the read-modify portion of a Read-Modify-Write instruction.
     fn alu_modify(&mut self, scratch: &mut MicroExecutor);
@@ -105,6 +106,10 @@ impl MicroExecutor {
         };
         // pre memory access alu stuff:
         let mut fixed_addr = None;
+        if !ucyc.bus.read {
+            // prepare data_bus with the data to write, if any
+            ctx.alu_prepare_store(self);
+        }
         match ucyc.alu {
             AluOp::NextOpcode => {
                 // we can ignore everything else i guess, PC guaranteed ok for next opcode fetch
@@ -136,11 +141,14 @@ impl MicroExecutor {
         if ucyc.bus.read {
             let (data, wait) = bus.read(addr, ucyc.bus.vda, ucyc.bus.vpa);
             self.data_latch = data;
-            self.write_latch(ctx, ucyc.copy_to, data);
+            //println!("read {data:#X} from {addr:#X}");
+            self.write_latch(ctx, ucyc.local_latch, data);
             ctx.tick(wait);
         } else {
-            let value = ctx.alu_prepare_store(self);
-            let wait = bus.write(addr, value, ucyc.bus.vda, ucyc.bus.vpa);
+            if !matches!(ucyc.local_latch, Latch::None) {
+                self.data_latch = self.read_latch(ctx, ucyc.local_latch);
+            }
+            let wait = bus.write(addr, self.data_latch, ucyc.bus.vda, ucyc.bus.vpa);
             ctx.tick(wait);
         }
         if ucyc.inc_src {
@@ -172,7 +180,7 @@ impl MicroExecutor {
                 }
             }
             AluOp::IncLatch(latch) => self.add_offset(ctx, latch, 1),
-            AluOp::Push => {
+            AluOp::DecSp => {
                 ctx.set_sp(ctx.sp().wrapping_sub(1));
             }
             AluOp::Modify => {
@@ -208,6 +216,7 @@ impl MicroExecutor {
 
     fn address_of<C: MicroContext>(&self, latch: Latch, ctx: &C) -> u32 {
         match latch {
+            Latch::Constant(c) => c as u32,
             Latch::Pc => ctx.pc() as u32,
             Latch::Sp => ctx.stack_base() as u32 + ctx.sp() as u32,
             Latch::Ea => self.ea,
@@ -245,7 +254,7 @@ impl MicroExecutor {
     fn write_latch<C: MicroContext>(&mut self, ctx: &mut C, latch: super::Latch, value: u8) {
         use super::Latch::*;
         match latch {
-            None => {}
+            None | Constant(_) => {}
             Ea => {
                 self.ea = (self.ea & !0xFFFF) | value as u32;
             }
@@ -272,7 +281,27 @@ impl MicroExecutor {
             PcHi => ctx.set_pc_hi(value),
             Sp => ctx.set_sp(value),
             Status => ctx.set_status(value),
+            BrkStatus => ctx.set_status(value | psr::I),
             SignedOffset8 => self.signed_offset8 = value as i8,
+        }
+    }
+
+    fn read_latch<C: MicroContext>(&mut self, ctx: &mut C, latch: super::Latch) -> u8 {
+        use super::Latch::*;
+        match latch {
+            None => 0,
+            Constant(c) => c as u8,
+            Ea | EaLo => self.ea as u8,
+            EaHi => (self.ea >> 8) as u8,
+            Op0 => self.op0,
+            Ptr | PtrLo => self.ptr as u8,
+            PtrHi => (self.ptr >> 8) as u8,
+            Pc | PcLo => ctx.pc() as u8,
+            PcHi => (ctx.pc() >> 8) as u8,
+            Sp => ctx.sp(),
+            Status => ctx.status(),
+            BrkStatus => ctx.status() | psr::I,
+            SignedOffset8 => u8::from_le_bytes(self.signed_offset8.to_le_bytes()),
         }
     }
 }
