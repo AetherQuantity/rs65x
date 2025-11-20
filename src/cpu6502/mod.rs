@@ -17,6 +17,8 @@ use crate::isa::table::{Instruction, Mnemonic};
 use crate::isa::{AddressMode, address_mode_subtypes::NoMemType};
 use crate::psr;
 
+use flavor::DecimalSemantics;
+
 pub use flavor::Flavor; // re-export for convenience
 
 /// CPU registers/state for a plain 6502-like core (8-bit A/X/Y, 16-bit PC).
@@ -135,9 +137,10 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 self.a |= read;
                 self.alu_set_zn(self.a);
             }
-            Adc | Sbc => {
-                todo!()
+            Adc => {
+                self.execute_adc(read);
             }
+            Sbc => todo!(),
             Cmp | Cpx | Cpy => {
                 let byte = match op {
                     Cmp => self.a,
@@ -217,8 +220,141 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     #[inline(always)]
+    fn execute_adc(&mut self, operand: u8) {
+        let acc = self.a;
+        let carry_in = self.alu_carry();
+        let binary = Self::binary_add(acc, operand, carry_in);
+
+        if (self.p & psr::D) == 0 || matches!(F::DECIMAL, DecimalSemantics::None) {
+            self.finish_adc_binary(binary);
+            return;
+        }
+
+        let adjust = Self::decimal_adjust_add(acc, operand, carry_in, binary.sum);
+        match F::DECIMAL {
+            DecimalSemantics::Nmos6502 => {
+                self.finish_adc_decimal_nmos(acc, operand, binary, adjust);
+            }
+            DecimalSemantics::Cmos65C02 => {
+                self.finish_adc_decimal_cmos(binary, adjust);
+            }
+            DecimalSemantics::None => {
+                self.finish_adc_binary(binary);
+            }
+        }
+    }
+
+    #[inline(always)]
+    fn finish_adc_binary(&mut self, binary: BinaryAddResult) {
+        self.a = binary.result;
+        self.alu_set_flag(psr::C, binary.carry);
+        self.alu_set_flag(psr::V, binary.overflow);
+        self.alu_set_zn(binary.result);
+    }
+
+    #[inline(always)]
+    fn finish_adc_decimal_nmos(
+        &mut self,
+        acc: u8,
+        operand: u8,
+        binary: BinaryAddResult,
+        adjust: DecimalAdjustResult,
+    ) {
+        self.a = adjust.result();
+        self.alu_set_flag(psr::C, adjust.carry());
+        let pre = adjust.pre_high();
+        self.alu_set_flag(psr::V, Self::adc_overflow(acc, operand, pre));
+        self.alu_set_flag(psr::N, (pre & psr::N) != 0);
+        self.alu_set_flag(psr::Z, binary.result == 0);
+    }
+
+    #[inline(always)]
+    fn finish_adc_decimal_cmos(&mut self, binary: BinaryAddResult, adjust: DecimalAdjustResult) {
+        let result = adjust.result();
+        self.a = result;
+        self.alu_set_flag(psr::C, adjust.carry());
+        self.alu_set_flag(psr::V, binary.overflow);
+        self.alu_set_flag(psr::Z, result == 0);
+        self.alu_set_flag(psr::N, (result & psr::N) != 0);
+    }
+
+    #[inline(always)]
+    fn decimal_adjust_add(
+        acc: u8,
+        operand: u8,
+        carry_in: bool,
+        sum: u16,
+    ) -> DecimalAdjustResult {
+        let carry = u8::from(carry_in) as u16;
+        let low_sum = (acc & 0x0F) as u16 + (operand & 0x0F) as u16 + carry;
+        let mut adjusted = sum;
+        if low_sum > 9 {
+            adjusted = adjusted.wrapping_add(0x06);
+        }
+        let pre_high = adjusted as u8;
+        if adjusted > 0x99 {
+            adjusted = adjusted.wrapping_add(0x60);
+        }
+        DecimalAdjustResult {
+            pre_high,
+            result: adjusted as u8,
+            carry: adjusted > 0xFF,
+        }
+    }
+
+    #[inline(always)]
+    fn adc_overflow(acc: u8, operand: u8, result: u8) -> bool {
+        ((acc ^ result) & 0x80) != 0 && ((acc ^ operand) & 0x80) == 0
+    }
+
+    #[inline(always)]
+    fn binary_add(lhs: u8, rhs: u8, carry_in: bool) -> BinaryAddResult {
+        let carry = u8::from(carry_in) as u16;
+        let sum = lhs as u16 + rhs as u16 + carry;
+        let result = sum as u8;
+        BinaryAddResult {
+            sum,
+            result,
+            carry: sum > 0xFF,
+            overflow: Self::adc_overflow(lhs, rhs, result),
+        }
+    }
+
+    #[inline(always)]
     fn tick(&mut self, wait: u8) {
         self.cycles += 1 + wait as u64;
+    }
+}
+
+#[derive(Clone, Copy)]
+struct BinaryAddResult {
+    sum: u16,
+    result: u8,
+    carry: bool,
+    overflow: bool,
+}
+
+#[derive(Clone, Copy)]
+struct DecimalAdjustResult {
+    pre_high: u8,
+    result: u8,
+    carry: bool,
+}
+
+impl DecimalAdjustResult {
+    #[inline(always)]
+    fn result(self) -> u8 {
+        self.result
+    }
+
+    #[inline(always)]
+    fn carry(self) -> bool {
+        self.carry
+    }
+
+    #[inline(always)]
+    fn pre_high(self) -> u8 {
+        self.pre_high
     }
 }
 
@@ -498,17 +634,23 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
     fn stack_base(&self) -> u16 {
         0x0100
     }
-    fn alu_prepare_store(&mut self, scratch: &mut MicroExecutor) -> u8 {
+    fn alu_prepare_store(&mut self, scratch: &mut MicroExecutor) {
         use Mnemonic::*;
+        if scratch.memory_action == crate::isa::MemoryAction::ReadModifyWrite {
+            // we just need to make sure the value in op0 we saved on the modify phase
+            // is in data_latch to be written
+            scratch.data_latch = scratch.op0;
+            return;
+        }
+        // otherwise, this is a write instruction, and each has a different value it requires
         match self.mnemonic() {
-            Sta | Pha => scratch.op0 = *self.a,
-            Stx | Phx => scratch.op0 = *self.x,
-            Sty | Phy => scratch.op0 = *self.y,
-            Stz => scratch.op0 = 0,
-            Php => scratch.op0 = *self.status,
+            Sta | Pha => scratch.data_latch = *self.a,
+            Stx | Phx => scratch.data_latch = *self.x,
+            Sty | Phy => scratch.data_latch = *self.y,
+            Stz => scratch.data_latch = 0,
+            Php => scratch.data_latch = *self.status,
             _ => {}
         }
-        scratch.op0
     }
 
     fn alu_modify(&mut self, scratch: &mut MicroExecutor) {

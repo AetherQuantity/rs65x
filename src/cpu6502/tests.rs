@@ -74,7 +74,7 @@ impl Bus for Harness {
     }
 
     fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) -> WaitStates {
-        println!("write access at {addr:#04X}");
+        println!("write access at {addr:#04X} | data = {data:#04X}");
         let access_type = AccessType::Write;
         let addr16 = addr as u16;
         self.mem[addr16 as usize] = data;
@@ -865,5 +865,282 @@ mod mem_cycle_accuracy {
 
         trace.assert_accesses(accesses);
         trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn jsr() {
+        // nmos and cmos are the same
+        let (mut cpu, mut bus) = setup_cmos(0x8000, &[0x20, 0x69, 0x80]); // JSR $8069
+        cpu.s = 0xFF;
+        bus.mem[0x8069] = 0xEA;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 6, "JSR is always 6 cycles");
+        assert_eq!(cpu.pc, 0x806A);
+        assert_eq!(cpu.s, 0xFD);
+        assert_eq!(bus.mem[0x1FF], 0x80);
+        assert_eq!(bus.mem[0x1FE], 0x02);
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x20),
+            Access::basic_read(0x8001, 0x69),
+            Access::basic_read(0x01FF, 0x00),
+            Access::basic_write(0x01FF, 0x80),
+            Access::basic_write(0x01FE, 0x02),
+            Access::basic_read(0x8002, 0x80),
+        ];
+        let prefetch = Access::basic_read(0x8069, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn rts() {
+        let (mut cpu, mut bus) = setup_cmos(0x806A, &[0x60, 0x69]); // RTS; junk
+        cpu.s = 0xFD;
+        bus.mem[0x1FE] = 0x02;
+        bus.mem[0x1FF] = 0x80; // address 0x8002 on the stack
+        bus.mem[0x8002] = 0xAB; // junk
+        bus.mem[0x8003] = 0xEA; // NOP
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 6, "RTS is always 6 cycles");
+        assert_eq!(cpu.pc, 0x8004);
+        assert_eq!(cpu.s, 0xFF);
+        assert_eq!(bus.mem[0x1FF], 0x80);
+        assert_eq!(bus.mem[0x1FE], 0x02);
+        let accesses = vec![
+            Access::basic_read(0x806A, 0x60),
+            Access::basic_read(0x806B, 0x69),
+            Access::basic_read(0x01FD, 0x00),
+            Access::basic_read(0x01FE, 0x02),
+            Access::basic_read(0x01FF, 0x80),
+            Access::basic_read(0x8002, 0xAB),
+        ];
+        let prefetch = Access::basic_read(0x8003, 0xEA);
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn brk() {
+        let (mut cpu, mut bus) = setup_cmos(0x8000, &[0x00, 0x69]); // BRK; junk
+        cpu.s = 0xFF;
+        cpu.p = 0;
+        bus.mem[0xFFFE] = 0x45;
+        bus.mem[0xFFFF] = 0x23;
+        bus.mem[0x2345] = 0xEA;
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 7, "BRK is always 7 cycles");
+        assert_eq!(cpu.pc, 0x2346);
+        let accesses = vec![
+            Access::basic_read(0x8000, 0x00), // BRK
+            Access::basic_read(0x8001, 0x69), // (pc is incremented here)
+            Access::basic_write(0x01FF, 0x80),
+            Access::basic_write(0x01FE, 0x02),
+            Access::basic_write(0x01FD, psr::I),
+            Access::basic_read(0xFFFE, 0x45),
+            Access::basic_read(0xFFFF, 0x23),
+        ];
+        let prefetch = Access::basic_read(0x2345, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+
+    #[test]
+    fn rti() {
+        let (mut cpu, mut bus) = setup_cmos(0x9000, &[0x40, 0x69]); // RTI; junk
+        cpu.s = 0xFC;
+        bus.mem[0x1FD] = psr::I;
+        bus.mem[0x1FE] = 0x02;
+        bus.mem[0x1FF] = 0x80; // address 0x8002 on the stack
+        bus.mem[0x8002] = 0xEA; // NOP
+        let trace = run_instruction(&mut cpu, &mut bus);
+        assert_eq!(trace.cycles, 6, "RTI is always 6 cycles");
+        assert_eq!(cpu.pc, 0x8003);
+        let accesses = vec![
+            Access::basic_read(0x9000, 0x40), // RTI
+            Access::basic_read(0x9001, 0x69),
+            Access::basic_read(0x01FC, 0x00), // dummy
+            Access::basic_read(0x01FD, psr::I),
+            Access::basic_read(0x01FE, 0x02),
+            Access::basic_read(0x01FF, 0x80),
+        ];
+        let prefetch = Access::basic_read(0x8002, 0xEA);
+
+        trace.assert_accesses(accesses);
+        trace.assert_prefetch(prefetch);
+    }
+}
+
+#[cfg(test)]
+mod alu_accuracy {
+    use crate::{cpu6502::flavor::*, psr::*};
+
+    use super::*;
+
+    fn setup_nmos(addr: u16, program: &[u8]) -> (Cpu6502<NMOS6502, Harness>, Harness) {
+        let mut bus = Harness::with_program(addr, program);
+        let mut cpu = Cpu6502::<NMOS6502, Harness>::new();
+
+        cpu.reset(&mut bus);
+        bus.clear_log(); // ignore reset-vector reads
+        assert_eq!(cpu.pc, addr);
+        (cpu, bus)
+    }
+
+    fn setup_cmos(addr: u16, program: &[u8]) -> (Cpu6502<CMOS65C02, Harness>, Harness) {
+        let mut bus = Harness::with_program(addr, program);
+        let mut cpu = Cpu6502::<CMOS65C02, Harness>::new();
+
+        cpu.reset(&mut bus);
+        bus.clear_log(); // ignore reset-vector reads
+        assert_eq!(cpu.pc, addr);
+        (cpu, bus)
+    }
+
+    fn setup_nes(addr: u16, program: &[u8]) -> (Cpu6502<NES, Harness>, Harness) {
+        let mut bus = Harness::with_program(addr, program);
+        let mut cpu = Cpu6502::<NES, Harness>::new();
+
+        cpu.reset(&mut bus);
+        bus.clear_log(); // ignore reset-vector reads
+        assert_eq!(cpu.pc, addr);
+        (cpu, bus)
+    }
+
+    #[test]
+    fn adc_binary_flag_matrix() {
+        struct Case {
+            desc: &'static str,
+            a: u8,
+            operand: u8,
+            carry_in: bool,
+            expected_a: u8,
+            expected_flags: u8,
+        }
+
+        const FLAG_MASK: u8 = N | Z | C | V;
+
+        let cases = [
+            Case {
+                desc: "simple addition keeps flags clear",
+                a: 0x0C,
+                operand: 0x10,
+                carry_in: false,
+                expected_a: 0x1C,
+                expected_flags: 0,
+            },
+            Case {
+                desc: "carry-in increments without setting carry out",
+                a: 0x00,
+                operand: 0x00,
+                carry_in: true,
+                expected_a: 0x01,
+                expected_flags: 0,
+            },
+            Case {
+                desc: "carry-in produces zero result and carry out",
+                a: 0xFF,
+                operand: 0x00,
+                carry_in: true,
+                expected_a: 0x00,
+                expected_flags: Z | C,
+            },
+            Case {
+                desc: "negative result without overflow",
+                a: 0x80,
+                operand: 0x00,
+                carry_in: false,
+                expected_a: 0x80,
+                expected_flags: N,
+            },
+            Case {
+                desc: "overflow without carry",
+                a: 0x50,
+                operand: 0x50,
+                carry_in: false,
+                expected_a: 0xA0,
+                expected_flags: N | V,
+            },
+            Case {
+                desc: "carry and overflow both asserted",
+                a: 0x80,
+                operand: 0x80,
+                carry_in: false,
+                expected_a: 0x00,
+                expected_flags: Z | C | V,
+            },
+        ];
+
+        for case in cases {
+            let (mut cpu, mut bus) = setup_nmos(0x8000, &[0x69, case.operand, 0xEA]);
+            cpu.a = case.a;
+            cpu.p = U_6502;
+            if case.carry_in {
+                cpu.p |= C;
+            } else {
+                cpu.p &= !C;
+            }
+            cpu.p &= !D;
+
+            run_instruction(&mut cpu, &mut bus);
+
+            assert_eq!(cpu.a, case.expected_a, "{}", case.desc);
+            assert_eq!(
+                cpu.p & FLAG_MASK,
+                case.expected_flags,
+                "{} set incorrect flags",
+                case.desc
+            );
+        }
+    }
+
+    #[test]
+    fn adc_decimal_mode_semantics() {
+        const FLAG_MASK: u8 = N | Z | C | V;
+
+        // 0x50 + 0x50 => 100 decimal, which produces a 0x00 result with decimal carry.
+        let (mut nmos_cpu, mut nmos_bus) = setup_nmos(0x8000, &[0x69, 0x50, 0xEA]);
+        nmos_cpu.a = 0x50;
+        nmos_cpu.p = U_6502 | D;
+        run_instruction(&mut nmos_cpu, &mut nmos_bus);
+
+        assert_eq!(nmos_cpu.a, 0x00, "NMOS decimal result should wrap to 00");
+        let nmos_flags = nmos_cpu.p & FLAG_MASK;
+        assert_eq!(
+            nmos_flags & (C | V),
+            C | V,
+            "NMOS should set carry and overflow"
+        );
+        assert_eq!(nmos_flags & N, N, "NMOS uses binary pre-adjust for N flag");
+        assert_eq!(nmos_flags & Z, 0, "NMOS zero flag follows binary result");
+
+        let (mut cmos_cpu, mut cmos_bus) = setup_cmos(0x8000, &[0x69, 0x50, 0xEA]);
+        cmos_cpu.a = 0x50;
+        cmos_cpu.p = U_6502 | D;
+        run_instruction(&mut cmos_cpu, &mut cmos_bus);
+
+        assert_eq!(cmos_cpu.a, 0x00, "CMOS decimal result should match NMOS");
+        let cmos_flags = cmos_cpu.p & FLAG_MASK;
+        assert_eq!(
+            cmos_flags & (C | V),
+            C | V,
+            "CMOS should set carry and overflow"
+        );
+        assert_eq!(cmos_flags & N, 0, "CMOS N flag follows adjusted result");
+        assert_eq!(cmos_flags & Z, Z, "CMOS zero flag follows adjusted result");
+
+        let (mut nes_cpu, mut nes_bus) = setup_nes(0x8000, &[0x69, 0x50, 0xEA]);
+        nes_cpu.a = 0x50;
+        nes_cpu.p = U_6502 | D; // D flag ignored entirely
+        run_instruction(&mut nes_cpu, &mut nes_bus);
+
+        assert_eq!(
+            nes_cpu.a, 0xA0,
+            "NES should ignore decimal mode and behave like binary ADC"
+        );
+        let nes_flags = nes_cpu.p & FLAG_MASK;
+        assert_eq!(nes_flags & (N | V), N | V, "NES should set binary N/V");
+        assert_eq!(nes_flags & (Z | C), 0, "NES should leave Z/C clear");
     }
 }
