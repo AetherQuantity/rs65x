@@ -21,15 +21,13 @@ const fn action_for_mnemonic(mnemonic: Mnemonic) -> MemoryAction {
         | Ply => MemoryAction::Read,
         Sta | Stx | Sty | Stz | Pha | Php | Phx | Phy => MemoryAction::Write,
         Asl | Lsr | Rol | Ror | Inc | Dec | Tsb | Trb => MemoryAction::ReadModifyWrite,
-        // the rest of these gentlemen don't check for read or write or whatever, default to Read
-        Tax | Tay | Txa | Tya | Tsx | Txs | Dex | Dey | Inx | Iny | Clc | Cld | Cli | Clv | Sec
-        | Sed | Sei | Jmp | Jsr | Rts | Bcc | Bcs | Beq | Bmi | Bne | Bpl | Bvc | Bvs | Bra
-        | Brk | Nop | Rti | Stp | Wai | Undefined => MemoryAction::Read, // who cares
         // R65C02 instructions
         Bbr0 | Bbr1 | Bbr2 | Bbr3 | Bbr4 | Bbr5 | Bbr6 | Bbr7 | Bbs0 | Bbs1 | Bbs2 | Bbs3
         | Bbs4 | Bbs5 | Bbs6 | Bbs7 => MemoryAction::Read,
         Rmb0 | Rmb1 | Rmb2 | Rmb3 | Rmb4 | Rmb5 | Rmb6 | Rmb7 | Smb0 | Smb1 | Smb2 | Smb3
         | Smb4 | Smb5 | Smb6 | Smb7 => MemoryAction::ReadModifyWrite,
+        // all the rest should default to Read i guess:
+        _ => MemoryAction::Read,
     }
 }
 
@@ -749,16 +747,235 @@ define_opcodes! {
     ///
     /// Memory access type: None
     Brk { Jump(ToInterrupt) = 0x00, },
-    /// # No Operation
-    /// Does nothing.
-    ///
-    /// Memory access type: None
-    Nop { NoMemory(Implied) = 0xEA, },
+
     /// # Return from Interrupt
     /// Pulls the status register and program counter from the stack.
     ///
     /// Memory access type: None
     Rti { Jump(FromInterrupt) = 0x40, },
+
+    /// # No Operation
+    /// Does nothing.
+    ///
+    /// Memory access type: None
+    Nop {
+        NoMemory(Implied) = 0xEA, // the real one
+
+        // Various "illegal" opcodes on NMOS that do the memory access but then do nothing
+        NoMemory(Implied) @[Nmos] = 0x1A,
+        NoMemory(Implied) @[Nmos] = 0x3A,
+        NoMemory(Implied) @[Nmos] = 0x5A,
+        NoMemory(Implied) @[Nmos] = 0x7A,
+        NoMemory(Implied) @[Nmos] = 0xDA,
+        NoMemory(Implied) @[Nmos] = 0xFA,
+        NoMemory(Immediate) @[Nmos] = 0x80,
+        NoMemory(Immediate) @[Nmos] = 0x82,
+        NoMemory(Immediate) @[Nmos] = 0x89,
+        NoMemory(Immediate) @[Nmos] = 0xC2,
+        NoMemory(Immediate) @[Nmos] = 0xE2,
+        DirectPage(None) @[Nmos] = 0x04,
+        DirectPage(None) @[Nmos] = 0x44,
+        DirectPage(None) @[Nmos] = 0x64,
+        DirectPage(X) @[Nmos] = 0x14,
+        DirectPage(X) @[Nmos] = 0x34,
+        DirectPage(X) @[Nmos] = 0x54,
+        DirectPage(X) @[Nmos] = 0x74,
+        DirectPage(X) @[Nmos] = 0xD4,
+        DirectPage(X) @[Nmos] = 0xF4,
+        Absolute(None) @[Nmos] = 0x0C,
+        Absolute(X) @[Nmos] = 0x1C,
+        Absolute(X) @[Nmos] = 0x3C,
+        Absolute(X) @[Nmos] = 0x5C,
+        Absolute(X) @[Nmos] = 0x7C,
+        Absolute(X) @[Nmos] = 0xDC,
+        Absolute(X) @[Nmos] = 0xFC,
+    },
+
+    // Illegal NMOS Opcodes ///////////////////////////////////////////////////////////////////////
+
+    /// # ALR (or ASR): AND + LSR
+    /// Illegal.
+    Alr { NoMemory(Immediate) @[Nmos] = 0x4B, },
+
+    /// # ANC: AND + set C flag
+    /// Illegal.
+    Anc {
+        NoMemory(Immediate) @[Nmos] = 0x0B,
+        NoMemory(Immediate) @[Nmos] = 0x2B,
+    },
+
+    /// # ANE (or XAA): * OR X + AND
+    /// Illegal. Highly unstable.
+    ///
+    /// A base value in A is determined based on the contets of A and a constant, which may be typically
+    /// $00, $ff, $ee, etc. The value of this constant depends on temerature, the chip series, and maybe
+    /// other factors, as well. In order to eliminate these uncertaincies from the equation, use either
+    /// 0 as the operand or a value of $FF in the accumulator.
+    Ane { NoMemory(Immediate) @[Nmos] = 0x8B, },
+
+    /// # ARR: AND + ROR
+    /// Illegal. This operation involves the adder:
+    /// - V-flag is set according to (A AND oper) + oper
+    /// - The carry is not set, but bit 7 (sign) is exchanged with the carry
+    Arr { NoMemory(Immediate) @[Nmos] = 0x6B, },
+
+    /// # DCP (DCM): DEC + CMP
+    /// Illegal. Decrements the operand and then compares the result to the accumulator.
+    Dcp {
+        DirectPage(None) @[Nmos] = 0xC7,
+        DirectPage(X)    @[Nmos] = 0xD7,
+        Absolute(None)   @[Nmos] = 0xCF,
+        Absolute(X)      @[Nmos] = 0xDF,
+        Absolute(Y)      @[Nmos] = 0xDB,
+        DpIndirect(X)    @[Nmos] = 0xC3,
+        DpIndirect(Y)    @[Nmos] = 0xD3,
+    },
+
+    /// # ISC (ISB, INS): INC + SBC
+    /// Illegal.
+    Isc {
+        DirectPage(None) @[Nmos] = 0xE7,
+        DirectPage(X)    @[Nmos] = 0xF7,
+        Absolute(None)   @[Nmos] = 0xEF,
+        Absolute(X)      @[Nmos] = 0xFF,
+        Absolute(Y)      @[Nmos] = 0xFB,
+        DpIndirect(X)    @[Nmos] = 0xE3,
+        DpIndirect(Y)    @[Nmos] = 0xF3,
+    },
+
+    /// # LAS (LDR): LDA + TSX
+    /// Illegal.
+    Las { Absolute(Y) @[Nmos] = 0xBB, },
+
+    /// # LAX: LDA + LDX
+    /// Illegal.
+    Lax {
+        DirectPage(None) @[Nmos] = 0xA7,
+        DirectPage(X)    @[Nmos] = 0xB7,
+        Absolute(None)   @[Nmos] = 0xAF,
+        Absolute(Y)      @[Nmos] = 0xBF,
+        DpIndirect(X)    @[Nmos] = 0xA3,
+        DpIndirect(Y)    @[Nmos] = 0xB3,
+    },
+
+    /// # LXA (LAX Immediate): Store * AND oper in A and X
+    /// Illegal. Highly Unstable.
+    ///
+    /// See ANE for details
+    Lxa { NoMemory(Immediate) @[Nmos] = 0xAB, },
+
+    /// # RLA: ROL + AND
+    /// Illegal.
+    Rla {
+        DirectPage(None) @[Nmos] = 0x27,
+        DirectPage(X)    @[Nmos] = 0x37,
+        Absolute(None)   @[Nmos] = 0x2F,
+        Absolute(X)      @[Nmos] = 0x3F,
+        Absolute(Y)      @[Nmos] = 0x3B,
+        DpIndirect(X)    @[Nmos] = 0x23,
+        DpIndirect(Y)    @[Nmos] = 0x33,
+    },
+
+    /// # RRA: ROR + ADC
+    /// Illegal.
+    Rra {
+        DirectPage(None) @[Nmos] = 0x67,
+        DirectPage(X)    @[Nmos] = 0x77,
+        Absolute(None)   @[Nmos] = 0x6F,
+        Absolute(X)      @[Nmos] = 0x7F,
+        Absolute(Y)      @[Nmos] = 0x7B,
+        DpIndirect(X)    @[Nmos] = 0x63,
+        DpIndirect(Y)    @[Nmos] = 0x73,
+    },
+
+    /// # SAX (AXS, AAX): A AND X
+    /// Illegal. A and X are put on the bus at the same time, effectively anding them
+    Sax {
+        DirectPage(None) @[Nmos] = 0x87,
+        DirectPage(Y)    @[Nmos] = 0x97,
+        Absolute(None)   @[Nmos] = 0x8F,
+        DpIndirect(X)    @[Nmos] = 0x83,
+    },
+
+    /// # SBX (AXS, SAX): CMP + DEX
+    /// Illegal.
+    Sbx { NoMemory(Immediate) @[Nmos] = 0xCB, },
+
+    /// # SHA (AHX, AXA)
+    /// Illegal. Stores A AND X AND (high-byte of addr. + 1) at addr.
+    ///
+    /// unstable: sometimes 'AND (H+1)' is dropped, page boundary crossings may not work (with
+    /// the high-byte of the value used as the high-byte of the address)
+    Sha {
+        Absolute(Y)   @[Nmos] = 0x9F,
+        DpIndirect(Y) @[Nmos] = 0x93,
+    },
+
+    /// # SHX (A11, SXA, XAS)
+    /// Illegal. Stores X AND (high-byte of addr. + 1) at addr.
+    ///
+    /// unstable: sometimes 'AND (H+1)' is dropped, page boundary crossings may not work (with
+    /// the high-byte of the value used as the high-byte of the address)
+    Shx { Absolute(Y) @[Nmos] = 0x9E, },
+
+    /// # SHY (A11, SYA, SAY)
+    /// Illegal. Stores Y AND (high-byte of addr. + 1) at addr.
+    ///
+    /// unstable: sometimes 'AND (H+1)' is dropped, page boundary crossings may not work (with
+    /// the high-byte of the value used as the high-byte of the address)
+    Shy { Absolute(Y) @[Nmos] = 0x9C, },
+
+    /// # SLO (ASO): ASL + ORA
+    /// Illegal.
+    Slo {
+        DirectPage(None) @[Nmos] = 0x07,
+        DirectPage(X)    @[Nmos] = 0x17,
+        Absolute(None)   @[Nmos] = 0x0F,
+        Absolute(X)      @[Nmos] = 0x1F,
+        Absolute(Y)      @[Nmos] = 0x1B,
+        DpIndirect(X)    @[Nmos] = 0x03,
+        DpIndirect(Y)    @[Nmos] = 0x13,
+    },
+
+    /// # SRE (LSE): LSR + EOR
+    /// Illegal.
+    Sre {
+        DirectPage(None) @[Nmos] = 0x47,
+        DirectPage(X)    @[Nmos] = 0x57,
+        Absolute(None)   @[Nmos] = 0x4F,
+        Absolute(X)      @[Nmos] = 0x5F,
+        Absolute(Y)      @[Nmos] = 0x5B,
+        DpIndirect(X)    @[Nmos] = 0x43,
+        DpIndirect(Y)    @[Nmos] = 0x53,
+    },
+
+    /// # TAS (XAS, SHS)
+    /// Illegal. Puts A AND X in SP and stores A AND X AND (high-byte of addr. + 1) at addr.
+    ///
+    /// unstable: sometimes 'AND (H+1)' is dropped, page boundary crossings may not work (with the
+    /// high-byte of the value used as the high-byte of the address)
+    Tas { Absolute(Y) @[Nmos] = 0x9B, },
+
+    /// # USBC (SBC): SBC + NOP
+    /// Illegal. Effectively same as normal SBC immediate, instr. E9.
+    Usbc { NoMemory(Immediate) = 0xEB, },
+
+    /// # Jam (or Kill, Halt)
+    /// Illegal. CPU enters an infinite loop, eventually constantly reading from 0xFFFF until reset
+    Jam {
+        NoMemory(Implied) @[Nmos] = 0x02,
+        NoMemory(Implied) @[Nmos] = 0x12,
+        NoMemory(Implied) @[Nmos] = 0x22,
+        NoMemory(Implied) @[Nmos] = 0x32,
+        NoMemory(Implied) @[Nmos] = 0x42,
+        NoMemory(Implied) @[Nmos] = 0x52,
+        NoMemory(Implied) @[Nmos] = 0x62,
+        NoMemory(Implied) @[Nmos] = 0x72,
+        NoMemory(Implied) @[Nmos] = 0x92,
+        NoMemory(Implied) @[Nmos] = 0xB2,
+        NoMemory(Implied) @[Nmos] = 0xD2,
+        NoMemory(Implied) @[Nmos] = 0xF2,
+    },
 
     // 65C02 New Opcodes ////////////////////////////////////////////////////////////////////////
 
