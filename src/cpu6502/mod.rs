@@ -202,6 +202,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         if self.ucycs.front().is_none() {
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
+            return StepResult::Pending;
         }
 
         let instruction = self
