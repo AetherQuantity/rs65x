@@ -212,6 +212,11 @@ impl MicroExecutor {
                 }
             }
             AluOp::SetPc(new_pc) => ctx.set_pc(new_pc),
+            AluOp::Jam => {
+                // decreasing the cursor in the queue guarantees that this same uCycle will be
+                // executed next cycle
+                queue.dec_head();
+            }
         }
         StepResult::Pending
     }

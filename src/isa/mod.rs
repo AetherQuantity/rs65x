@@ -136,6 +136,11 @@ pub enum AddressMode {
     ///     - 1-byte value, which is a signed relative address to jump to if the branch succeeds
     Branch(BranchType),
 
+    /// # Jam
+    /// This NMOS-only address type is used for illegal Jam opcodes, which make predictable memory accesses
+    /// and then enter an infinite loop.
+    Jam,
+
     // 16-bit instructions /////////////////////////////////////////////////////////////////////
     /// # Absolute Long
     /// The operand is a 3-byte value following the opcode, which is a full 24-bit address to read from or
@@ -207,6 +212,7 @@ impl fmt::Display for AddressMode {
             Branch(BranchType::Relative) => write!(f, "Branch Rel"),
             Branch(BranchType::DpRelative) => write!(f, "Branch DpRel"),
             Stack => write!(f, "Stack"),
+            Jam => write!(f, "Jam"),
 
             // 16-bit
             Jump(JumpType::JmpIndirectLong) => write!(f, "JmpIndirectLong"),
@@ -267,6 +273,7 @@ impl AddressMode {
             AddressMode::Jump(JumpType::FromInterrupt) => M::emit_rti(queue, ctx),
             AddressMode::Branch(BranchType::DpRelative) => M::emit_branch_dprel(queue, ctx),
             AddressMode::Branch(BranchType::Relative) => M::emit_branch_rel(queue, ctx),
+            AddressMode::Jam => M::emit_jam(queue, ctx),
             // 16-bit only:
             AddressMode::Branch(BranchType::RelativeLong) => todo!(),
             AddressMode::AbsoluteLong(_offset_type) => todo!(),

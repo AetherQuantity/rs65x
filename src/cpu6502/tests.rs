@@ -1027,7 +1027,7 @@ mod alu_accuracy {
         cmos_cpu.step(&mut cmos_bus);
         let nmos = nmos_cpu.current_inst.unwrap();
         let cmos = cmos_cpu.current_inst.unwrap();
-        assert_eq!(nmos.mnemonic, Mnemonic::Undefined); // TODO: eventually will be replaced with cycle-accurate illegal op
+        assert_eq!(nmos.mnemonic, Mnemonic::Jam);
         assert_eq!(cmos.mnemonic, Mnemonic::Lda);
     }
 

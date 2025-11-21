@@ -28,6 +28,7 @@ pub struct Harness {
     pub last: Access,
     pub lines: Lines,
     pub cycle: u64,
+    pub debug_print: bool,
 }
 
 impl Default for Harness {
@@ -37,6 +38,7 @@ impl Default for Harness {
             last: Access::basic_read(0, 0),
             lines: Default::default(),
             cycle: Default::default(),
+            debug_print: false,
         }
     }
 }
@@ -62,7 +64,9 @@ impl Bus for Harness {
         let access_type = AccessType::Read;
         let addr16 = addr as u16;
         let data = self.mem[addr16 as usize];
-        //println!("read access at {addr:#04X} | data = {data:#04X}");
+        if self.debug_print {
+            println!("read access at {addr:#04X} | data = {data:#04X}");
+        }
         self.last = Access {
             addr: addr16,
             data,
@@ -73,7 +77,9 @@ impl Bus for Harness {
     }
 
     fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) -> WaitStates {
-        //println!("write access at {addr:#04X} | data = {data:#04X}");
+        if self.debug_print {
+            println!("write access at {addr:#04X} | data = {data:#04X}");
+        }
         let access_type = AccessType::Write;
         let addr16 = addr as u16;
         self.mem[addr16 as usize] = data;

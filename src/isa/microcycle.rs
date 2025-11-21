@@ -65,6 +65,13 @@ impl UcycQueue {
         self.head -= 1;
         unsafe { *self.buf.get_unchecked_mut(self.head as usize) = new }
     }
+
+    /// Used for JAM instructions: decreasing the head on each cycle creates
+    /// an infinite loop
+    #[inline(always)]
+    pub fn dec_head(&mut self) {
+        self.head -= 1;
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -76,7 +83,7 @@ pub enum BusAction {
     DummyWrite,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct BusCycle {
     pub addr: Latch,
     pub vda: bool,
@@ -84,7 +91,7 @@ pub struct BusCycle {
     pub read: bool,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub enum AluOp {
     None,
     NextOpcode,
@@ -96,9 +103,10 @@ pub enum AluOp {
     IncLatch(Latch),
     Branch,
     SetPc(u16),
+    Jam,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct MicroCycle {
     pub bus: BusCycle,
     pub inc_src: bool,
@@ -475,5 +483,9 @@ pub trait MicroCode {
         queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
         queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, false));
         queue.push(MicroCycle::opcode_fetch());
+    }
+
+    fn emit_jam(_queue: &mut UcycQueue, _ctx: DecodeContext) {
+        unreachable!("JAM only occurs on NMOS6502-based cores");
     }
 }

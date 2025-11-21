@@ -963,18 +963,18 @@ define_opcodes! {
     /// # Jam (or Kill, Halt)
     /// Illegal. CPU enters an infinite loop, eventually constantly reading from 0xFFFF until reset
     Jam {
-        NoMemory(Implied) @[Nmos] = 0x02,
-        NoMemory(Implied) @[Nmos] = 0x12,
-        NoMemory(Implied) @[Nmos] = 0x22,
-        NoMemory(Implied) @[Nmos] = 0x32,
-        NoMemory(Implied) @[Nmos] = 0x42,
-        NoMemory(Implied) @[Nmos] = 0x52,
-        NoMemory(Implied) @[Nmos] = 0x62,
-        NoMemory(Implied) @[Nmos] = 0x72,
-        NoMemory(Implied) @[Nmos] = 0x92,
-        NoMemory(Implied) @[Nmos] = 0xB2,
-        NoMemory(Implied) @[Nmos] = 0xD2,
-        NoMemory(Implied) @[Nmos] = 0xF2,
+        Jam @[Nmos] = 0x02,
+        Jam @[Nmos] = 0x12,
+        Jam @[Nmos] = 0x22,
+        Jam @[Nmos] = 0x32,
+        Jam @[Nmos] = 0x42,
+        Jam @[Nmos] = 0x52,
+        Jam @[Nmos] = 0x62,
+        Jam @[Nmos] = 0x72,
+        Jam @[Nmos] = 0x92,
+        Jam @[Nmos] = 0xB2,
+        Jam @[Nmos] = 0xD2,
+        Jam @[Nmos] = 0xF2,
     },
 
     // 65C02 New Opcodes ////////////////////////////////////////////////////////////////////////

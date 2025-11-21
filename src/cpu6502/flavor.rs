@@ -125,6 +125,37 @@ impl MicroCode for Micro6502 {
     fn emit_rts(queue: &mut UcycQueue, _ctx: DecodeContext) {
         emit_rts_8bit(queue, _ctx);
     }
+
+    fn emit_jam(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        queue.push(MicroCycle::read(Latch::Pc, Latch::None, true));
+        queue.push(MicroCycle::read(
+            Latch::Constant(0xFFFF),
+            Latch::None,
+            false,
+        ));
+        queue.push(MicroCycle::read(
+            Latch::Constant(0xFFFE),
+            Latch::None,
+            false,
+        ));
+        queue.push(MicroCycle::read(
+            Latch::Constant(0xFFFE),
+            Latch::None,
+            false,
+        ));
+        queue.push(MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Constant(0xFFFF),
+                vda: false,
+                vpa: false,
+                read: true,
+            },
+            inc_src: false,
+            local_latch: Latch::None,
+            alu: AluOp::Jam,
+        });
+        queue.push(MicroCycle::opcode_fetch()); // this will never be executed
+    }
 }
 
 pub struct Micro65C02;

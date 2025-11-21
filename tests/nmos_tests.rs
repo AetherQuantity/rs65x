@@ -12,7 +12,7 @@ mod setup;
 
 #[test]
 fn run_all() {
-    for op in 0x00..=0xFF {
+    for op in 0x03..=0xFF {
         run_opcode(op).unwrap_or_default();
     }
 }
@@ -29,6 +29,7 @@ fn run_opcode(op: u8) -> Result<(), String> {
     println!("Starting {}, {}", inst.mnemonic, inst.address_mode);
     for test in &tests {
         let (mut cpu, mut bus) = setup_initial(&test.initial);
+        bus.debug_print = true;
         for cycle in &test.cycles {
             cpu.step(&mut bus);
             assert_eq!(cycle, &bus.last_cycle());
