@@ -93,7 +93,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     fn prepare_instruction(&mut self, opcode: u8) {
-        let instruction = Instruction::from_byte(opcode);
+        let instruction = Instruction::from_byte(opcode, F::OPCODE_TABLE);
         self.current_opcode = opcode;
         self.current_inst = Some(instruction);
         self.scratch.reset();

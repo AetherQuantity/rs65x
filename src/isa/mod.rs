@@ -147,6 +147,14 @@ pub enum AddressMode {
     /// 65C816 only.
     AbsoluteLong(OffsetType),
 
+    /// # Direct Page Indirect Long
+    /// The operand is a one-byte DirectPage address, pointing to a three-byte absolute address. Similar to
+    /// DpIndirect, but for 3-byte addresses instead of 2.
+    /// - No offset (eg. LDA [$80])
+    /// - Y offset (eg. LDA [$80],y)
+    /// - X offset doesn't exist, as far as I can tell. TODO
+    DpIndirectLong(OffsetType),
+
     /// # Block Move
     /// The second byte of the instruction contains the high-order 8 bits of the destination address  
     /// and the Y Index Register contains the low-order 16 bits of the destination address. The third
@@ -206,6 +214,9 @@ impl fmt::Display for AddressMode {
             AbsoluteLong(OffsetType::None) => write!(f, "AbsoluteLong"),
             AbsoluteLong(OffsetType::X) => write!(f, "AbsoluteLongX"),
             AbsoluteLong(OffsetType::Y) => write!(f, "AbsoluteLongY"),
+            DpIndirectLong(OffsetType::None) => write!(f, "IndirectLong"),
+            DpIndirectLong(OffsetType::Y) => write!(f, "IndirectLongY"),
+            DpIndirectLong(OffsetType::X) => write!(f, "no such thing as IndirectLongX"),
             BlockMove => write!(f, "BlockMove"),
             StackRelative(OffsetType::None) => write!(f, "StackRelative"),
             StackRelative(OffsetType::Y) => write!(f, "StackRelativeY"),
@@ -259,6 +270,7 @@ impl AddressMode {
             // 16-bit only:
             AddressMode::Branch(BranchType::RelativeLong) => todo!(),
             AddressMode::AbsoluteLong(_offset_type) => todo!(),
+            AddressMode::DpIndirectLong(_offset_type) => todo!(),
             AddressMode::BlockMove => todo!(),
             AddressMode::StackRelative(_offset_type) => todo!(),
             AddressMode::Jump(JumpType::JmpIndirectLong) => todo!(),

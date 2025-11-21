@@ -43,11 +43,68 @@ const fn make_empty_table() -> [Instruction; 256] {
 }
 
 macro_rules! define_opcodes {
+    (@emit_entry $table_var:ident, $table_ident:ident, $mnemonic:ident,
+        $mode:ident $( ( $variant:ident ) )?, $code:expr
+    ) => {{
+        let memory_action = action_for_mnemonic(Mnemonic::$mnemonic);
+        $table_var[$code as usize] = Instruction {
+            mnemonic: Mnemonic::$mnemonic,
+            address_mode: AddressMode::$mode $( ( $variant ) )?,
+            memory_action,
+        };
+    }};
+    (@emit_entry $table_var:ident, $table_ident:ident, $mnemonic:ident,
+        $mode:ident $( ( $variant:ident ) )?, $code:expr; [$($filter:ident),+ $(,)?]
+    ) => {{
+        let include = false $(|| matches!(OpcodeTable::$table_ident, OpcodeTable::$filter))+;
+        if include {
+            define_opcodes!(@emit_entry $table_var, $table_ident, $mnemonic, $mode $( ( $variant ) )?, $code);
+        }
+    }};
+    (@fill_table $table_var:ident, $table_ident:ident;) => {};
+    (@fill_table $table_var:ident, $table_ident:ident;
+        $(#[$doc:meta])*
+        $mnemonic:ident {
+            $(
+                $mode:ident $( ( $variant:ident ) )?
+                $( @ [ $($entry_table:ident),+ ] )?
+                = $code:expr,
+            )+
+        },
+        $($rest:tt)*
+    ) => {
+        $(
+            define_opcodes!(
+                @emit_entry $table_var, $table_ident, $mnemonic, $mode $( ( $variant ) )?, $code
+                $( ; [$($entry_table),+] )?
+            );
+        )+
+        define_opcodes!(@fill_table $table_var, $table_ident; $($rest)*);
+    };
+    (@fill_table $table_var:ident, $table_ident:ident;) => {};
+    (@build_tables [] => {$($definitions:tt)*}) => {};
+    (@build_tables [$table:ident $(, $rest:ident)*] => {$($definitions:tt)*}) => {
+        #[allow(non_upper_case_globals)]
+        pub static $table: [Instruction; 256] = {
+            #[allow(unused_imports)]
+            use address_mode_subtypes::{NoMemType::*, OffsetType::*, JumpType::*, BranchType::*};
+            let mut table_data: [Instruction; 256] = make_empty_table();
+            define_opcodes!(@fill_table table_data, $table; $($definitions)*);
+            table_data
+        };
+        define_opcodes!(@build_tables [$($rest),*] => {$($definitions)*});
+    };
     (
+        tables: [$($table:ident),+ $(,)?];
+
         $(
             $(#[$doc:meta])*
             $mnemonic:ident {
-                $($mode:ident $( ( $variant:ident ) )? = $code:expr,)+
+                $(
+                    $mode:ident $( ( $variant:ident ) )?
+                    $( @ [ $($entry_table:ident),+ $(,)? ] )?
+                    = $code:expr,
+                )+
             },
         )+
     ) => {
@@ -59,30 +116,48 @@ macro_rules! define_opcodes {
                 $mnemonic,
             )+
         }
-        pub static OPCODE_TABLE: [Instruction; 256] = {
-            let mut table: [Instruction; 256] = make_empty_table();
-            $(
-                $(
-                    #[allow(unused_imports)] // for some reason my use statement here is generating this warning
-                    use Mnemonic::*;
-                    #[allow(unused_imports)]
-                    use address_mode_subtypes::
-                        {NoMemType::*, OffsetType::*, JumpType::*, BranchType::*, JumpType::*};
-                    let memory_action = action_for_mnemonic($mnemonic);
-                    table[$code as usize] = Instruction {
-                        mnemonic: Mnemonic::$mnemonic,
-                        address_mode: AddressMode::$mode $( ( $variant ) )?,
-                        memory_action,
-                    };
-                )+
-            )+
-            table
-        };
+
+        #[derive(Debug, PartialEq, Eq, Clone, Copy)]
+        pub enum OpcodeTable {
+            $($table),+
+        }
+
+        pub mod opcode_tables {
+            use super::*;
+
+            define_opcodes!(
+                @build_tables [$($table),+] => {
+                    $(
+                        $(#[$doc])*
+                        $mnemonic {
+                            $(
+                                $mode $( ( $variant ) )?
+                                $( @ [ $($entry_table),+ ] )?
+                                = $code,
+                            )+
+                        },
+                    )+
+                }
+            );
+        }
+
+        impl OpcodeTable {
+            const fn data(self) -> &'static [Instruction; 256] {
+                match self {
+                    $(OpcodeTable::$table => &opcode_tables::$table),+
+                }
+            }
+
+            #[inline(always)]
+            pub fn decode(self, op: u8) -> Instruction {
+                // SAFETY: each opcode table contains entries for all 256 opcodes
+                unsafe { *self.data().get_unchecked(op as usize) }
+            }
+        }
 
         impl Instruction {
-            pub fn from_byte(op: u8) -> Instruction {
-                // SAFETY: OPCODE_TABLE is a completely filled array with the full range of u8 (0x00-0xFF) validly indexable
-                unsafe { *OPCODE_TABLE.get_unchecked(op as usize) }
+            pub fn from_byte(op: u8, table: OpcodeTable) -> Instruction {
+                table.decode(op)
             }
         }
 
@@ -92,15 +167,17 @@ macro_rules! define_opcodes {
                     $(
                         Mnemonic::$mnemonic => write!(f, "{}", stringify!($mnemonic)),
                     )+
-                    Mnemonic::Undefined => write!(f, "Und")
+                    Mnemonic::Undefined => write!(f, "Und"),
                 }
             }
         }
-    }
+    };
 }
 
 // this macro also creates the pub enum Mnemonic
 define_opcodes! {
+    tables: [Nmos, Cmos, Wdc816];
+
     // 6502 Opcodes ///////////////////////////////////////////////////////////////////////////////
 
     /// # Load Accumulator
@@ -118,9 +195,13 @@ define_opcodes! {
         Absolute(Y)         = 0xB9,
         DpIndirect(X)       = 0xA1,
         DpIndirect(Y)       = 0xB1,
-
-        // 65C02
-        DpIndirect(None) = 0xB2,
+        DpIndirect(None) @[Cmos, Wdc816] = 0xB2,
+        StackRelative(None)  @[Wdc816]   = 0xA3,
+        StackRelative(Y)     @[Wdc816]   = 0xB3,
+        DpIndirectLong(None) @[Wdc816]   = 0xA7,
+        DpIndirectLong(Y)    @[Wdc816]   = 0xB7,
+        AbsoluteLong(None)   @[Wdc816]   = 0xAF,
+        AbsoluteLong(X)      @[Wdc816]   = 0xBF,
     },
     /// # Load X Register
     /// Loads a byte of memory into the X register.
@@ -163,9 +244,13 @@ define_opcodes! {
         Absolute(Y)      = 0x99,
         DpIndirect(X)    = 0x81,
         DpIndirect(Y)    = 0x91,
-
-        // 65C02
-        DpIndirect(None) = 0x92,
+        DpIndirect(None) @[Cmos, Wdc816] = 0x92,
+        StackRelative(None)  @[Wdc816]   = 0x83,
+        StackRelative(Y)     @[Wdc816]   = 0x93,
+        DpIndirectLong(None) @[Wdc816]   = 0x87,
+        DpIndirectLong(Y)    @[Wdc816]   = 0x97,
+        AbsoluteLong(None)   @[Wdc816]   = 0x8F,
+        AbsoluteLong(X)      @[Wdc816]   = 0x9F,
     },
     /// # Store X Register
     /// Stores the X register in memory.
@@ -269,9 +354,13 @@ define_opcodes! {
         Absolute(Y)         = 0x39,
         DpIndirect(X)       = 0x21,
         DpIndirect(Y)       = 0x31,
-
-        // 65C02
-        DpIndirect(None) = 0x32,
+        DpIndirect(None) @[Cmos, Wdc816] = 0x32,
+        StackRelative(None)  @[Wdc816]   = 0x23,
+        StackRelative(Y)     @[Wdc816]   = 0x33,
+        DpIndirectLong(None) @[Wdc816]   = 0x27,
+        DpIndirectLong(Y)    @[Wdc816]   = 0x37,
+        AbsoluteLong(None)   @[Wdc816]   = 0x2F,
+        AbsoluteLong(X)      @[Wdc816]   = 0x3F,
     },
     /// # Logical EOR (XOR)
     /// Exclusive ORs the accumulator with a byte of memory.
@@ -288,9 +377,13 @@ define_opcodes! {
         Absolute(Y)         = 0x59,
         DpIndirect(X)       = 0x41,
         DpIndirect(Y)       = 0x51,
-
-        // 65C02
-        DpIndirect(None) = 0x52,
+        DpIndirect(None) @[Cmos, Wdc816] = 0x52,
+        StackRelative(None)  @[Wdc816]   = 0x43,
+        StackRelative(Y)     @[Wdc816]   = 0x53,
+        DpIndirectLong(None) @[Wdc816]   = 0x47,
+        DpIndirectLong(Y)    @[Wdc816]   = 0x57,
+        AbsoluteLong(None)   @[Wdc816]   = 0x4F,
+        AbsoluteLong(X)      @[Wdc816]   = 0x5F,
     },
     /// # Logical OR
     /// Logical ORs the accumulator with a byte of memory.
@@ -307,9 +400,13 @@ define_opcodes! {
         Absolute(Y)         = 0x19,
         DpIndirect(X)       = 0x01,
         DpIndirect(Y)       = 0x11,
-
-        // 65C02
-        DpIndirect(None) = 0x12,
+        DpIndirect(None) @[Cmos, Wdc816] = 0x12,
+        StackRelative(None)  @[Wdc816]   = 0x03,
+        StackRelative(Y)     @[Wdc816]   = 0x13,
+        DpIndirectLong(None) @[Wdc816]   = 0x07,
+        DpIndirectLong(Y)    @[Wdc816]   = 0x17,
+        AbsoluteLong(None)   @[Wdc816]   = 0x0F,
+        AbsoluteLong(X)      @[Wdc816]   = 0x1F,
     },
 
     /// # Bit Test
@@ -323,11 +420,9 @@ define_opcodes! {
     Bit {
         DirectPage(None) = 0x24,
         Absolute(None)   = 0x2C,
-
-        // 65C02
-        NoMemory(Immediate) = 0x89,
-        DirectPage(X)       = 0x34,
-        Absolute(X)         = 0x3C,
+        NoMemory(Immediate) @[Cmos, Wdc816] = 0x89,
+        DirectPage(X)       @[Cmos, Wdc816] = 0x34,
+        Absolute(X)         @[Cmos, Wdc816] = 0x3C,
     },
 
     /// # Add with Carry
@@ -345,9 +440,13 @@ define_opcodes! {
         Absolute(Y)         = 0x79,
         DpIndirect(X)       = 0x61,
         DpIndirect(Y)       = 0x71,
-
-        // 65C02
-        DpIndirect(None) = 0x72,
+        DpIndirect(None) @[Cmos, Wdc816] = 0x72,
+        StackRelative(None)  @[Wdc816]   = 0x63,
+        StackRelative(Y)     @[Wdc816]   = 0x73,
+        DpIndirectLong(None) @[Wdc816]   = 0x67,
+        DpIndirectLong(Y)    @[Wdc816]   = 0x77,
+        AbsoluteLong(None)   @[Wdc816]   = 0x6F,
+        AbsoluteLong(X)      @[Wdc816]   = 0x7F,
     },
     /// # Subtract with Carry
     /// Subtracts a byte of memory from the accumulator using the carry flag. The carry flag is treated as a borrow,
@@ -365,9 +464,13 @@ define_opcodes! {
         Absolute(Y)         = 0xF9,
         DpIndirect(X)       = 0xE1,
         DpIndirect(Y)       = 0xF1,
-
-        // 65C02
-        DpIndirect(None) = 0xF2,
+        DpIndirect(None) @[Cmos, Wdc816] = 0xF2,
+        StackRelative(None)  @[Wdc816]   = 0xE3,
+        StackRelative(Y)     @[Wdc816]   = 0xF3,
+        DpIndirectLong(None) @[Wdc816]   = 0xE7,
+        DpIndirectLong(Y)    @[Wdc816]   = 0xF7,
+        AbsoluteLong(None)   @[Wdc816]   = 0xEF,
+        AbsoluteLong(X)      @[Wdc816]   = 0xFF,
     },
     /// # Compare Accumulator
     /// Compares the accumulator with a byte of memory. If the accumulator is greater than or equal to the memory value,
@@ -386,9 +489,13 @@ define_opcodes! {
         Absolute(Y)         = 0xD9,
         DpIndirect(X)       = 0xC1,
         DpIndirect(Y)       = 0xD1,
-
-        // 65C02
-        DpIndirect(None) = 0xD2,
+        DpIndirect(None) @[Cmos, Wdc816] = 0xD2,
+        StackRelative(None)  @[Wdc816]   = 0xC3,
+        StackRelative(Y)     @[Wdc816]   = 0xD3,
+        DpIndirectLong(None) @[Wdc816]   = 0xC7,
+        DpIndirectLong(X)    @[Wdc816]   = 0xD7,
+        AbsoluteLong(None)   @[Wdc816]   = 0xCF,
+        AbsoluteLong(X)      @[Wdc816]   = 0xDF,
     },
     /// # Compare X Register
     /// Compares the X register with a byte of memory. If the X register is greater than or equal to the memory value,
@@ -428,9 +535,7 @@ define_opcodes! {
         DirectPage(X)    = 0xF6,
         Absolute(None)   = 0xEE,
         Absolute(X)      = 0xFE,
-
-        // 65C02
-        NoMemory(Implied) = 0x1A,
+        NoMemory(Implied) @[Cmos, Wdc816] = 0x1A,
     },
     /// # Increment X Register
     /// Increments the X register by one.
@@ -458,9 +563,7 @@ define_opcodes! {
         DirectPage(X)    = 0xD6,
         Absolute(None)   = 0xCE,
         Absolute(X)      = 0xDE,
-
-        // 65C02
-        NoMemory(Implied) = 0x3A,
+        NoMemory(Implied) @[Cmos, Wdc816] = 0x3A,
     },
     /// # Decrement X Register
     /// Decrements the X register by one.
@@ -547,9 +650,7 @@ define_opcodes! {
     Jmp {
         Jump(JmpAbsolute) = 0x4C,
         Jump(JmpIndirect) = 0x6C,
-
-        // 65C02
-        Jump(JmpIndirectX) = 0x7C,
+        Jump(JmpIndirectX) @[Cmos, Wdc816] = 0x7C,
     },
     /// # Jump to Subroutine
     /// Pushes the address of the next instruction onto the stack, then sets the program counter to the
@@ -665,38 +766,38 @@ define_opcodes! {
     /// Branches to the relative address specified by the signed offset operand.
     ///
     /// Memory access type: None
-    Bra { Branch(Relative) = 0x80, },
+    Bra { Branch(Relative) @[Cmos, Wdc816] = 0x80, },
 
     /// # Push X Register
     /// Pushes the X register onto the stack.
     ///
     /// Memory access type: Write
-    Phx { Stack = 0xDA, },
+    Phx { Stack @[Cmos, Wdc816] = 0xDA, },
     /// # Push Y Register
     /// Pushes the Y register onto the stack.
     ///
     /// Memory access type: Write
-    Phy { Stack = 0x5A, },
+    Phy { Stack @[Cmos, Wdc816] = 0x5A, },
     /// # Pull X Register
     /// Pulls the X register from the stack.
     ///
     /// Memory access type: Read
-    Plx { Stack = 0xFA, },
+    Plx { Stack @[Cmos, Wdc816] = 0xFA, },
     /// # Pull Y Register
     /// Pulls the Y register from the stack.
     ///
     /// Memory access type: Read
-    Ply { Stack = 0x7A, },
+    Ply { Stack @[Cmos, Wdc816] = 0x7A, },
 
     /// # Store Zero
     /// Stores zero in memory.
     ///
     /// Memory access type: Write
     Stz {
-        DirectPage(None) = 0x64,
-        DirectPage(X)    = 0x74,
-        Absolute(None)   = 0x9C,
-        Absolute(X)      = 0x9E,
+        DirectPage(None) @[Cmos, Wdc816] = 0x64,
+        DirectPage(X)    @[Cmos, Wdc816] = 0x74,
+        Absolute(None)   @[Cmos, Wdc816] = 0x9C,
+        Absolute(X)      @[Cmos, Wdc816] = 0x9E,
     },
     /// # Test and Reset Bits
     /// The Z bit is set to 1 if the AND of the accumulator and memory is zero.
@@ -708,8 +809,8 @@ define_opcodes! {
     ///
     /// M = M&~A, Z = (A&M)==0
     Trb {
-        DirectPage(None) = 0x14,
-        Absolute(None)   = 0x1C,
+        DirectPage(None) @[Cmos, Wdc816] = 0x14,
+        Absolute(None)   @[Cmos, Wdc816] = 0x1C,
     },
     /// # Test and Set Bits
     /// The Z bit is set to 1 if the AND of the accumulator and memory is zero.
@@ -721,8 +822,8 @@ define_opcodes! {
     ///
     /// M = M|A, Z = (A&M)==0
     Tsb {
-        DirectPage(None) = 0x04,
-        Absolute(None)   = 0x0C,
+        DirectPage(None) @[Cmos, Wdc816] = 0x04,
+        Absolute(None)   @[Cmos, Wdc816] = 0x0C,
     },
 
     /// # Stop the Processor
@@ -730,7 +831,7 @@ define_opcodes! {
     /// interrupts or reset signals until the clock input is restored via a hardware reset.
     ///
     /// 65C02 and later only.
-    Stp { NoMemory(Implied) = 0xDB, },
+    Stp { NoMemory(Implied) @[Cmos, Wdc816] = 0xDB, },
     /// # Wait for Interrupt
     /// Stops the processor until an interrupt occurs. The processor will wait until an interrupt or reset signal
     /// (i.e. IRQ, NMI, RESET). In additiion to reducing power consumption, using WAI also ensures that the interrupt
@@ -738,136 +839,139 @@ define_opcodes! {
     /// to finish all instructions before entering WAI.
     ///
     /// 65C02 and later only.
-    Wai { NoMemory(Implied) = 0xCB, },
+    Wai { NoMemory(Implied) @[Cmos, Wdc816] = 0xCB, },
 
     // R65C02 Opcodes (Rockwell) ////////////////////////////////////////////////////
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr0 { Branch(DpRelative) = 0x0F, },
+    Bbr0 { Branch(DpRelative) @[Cmos] = 0x0F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr1 { Branch(DpRelative) = 0x1F, },
+    Bbr1 { Branch(DpRelative) @[Cmos] = 0x1F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr2 { Branch(DpRelative) = 0x2F, },
+    Bbr2 { Branch(DpRelative) @[Cmos] = 0x2F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr3 { Branch(DpRelative) = 0x3F, },
+    Bbr3 { Branch(DpRelative) @[Cmos] = 0x3F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr4 { Branch(DpRelative) = 0x4F, },
+    Bbr4 { Branch(DpRelative) @[Cmos] = 0x4F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr5 { Branch(DpRelative) = 0x5F, },
+    Bbr5 { Branch(DpRelative) @[Cmos] = 0x5F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr6 { Branch(DpRelative) = 0x6F, },
+    Bbr6 { Branch(DpRelative) @[Cmos] = 0x6F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr7 { Branch(DpRelative) = 0x7F, },
+    Bbr7 { Branch(DpRelative) @[Cmos] = 0x7F, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs0 { Branch(DpRelative) = 0x8F, },
+    Bbs0 { Branch(DpRelative) @[Cmos] = 0x8F, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs1 { Branch(DpRelative) = 0x9F, },
+    Bbs1 { Branch(DpRelative) @[Cmos] = 0x9F, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs2 { Branch(DpRelative) = 0xAF, },
+    Bbs2 { Branch(DpRelative) @[Cmos] = 0xAF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs3 { Branch(DpRelative) = 0xBF, },
+    Bbs3 { Branch(DpRelative) @[Cmos] = 0xBF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs4 { Branch(DpRelative) = 0xCF, },
+    Bbs4 { Branch(DpRelative) @[Cmos] = 0xCF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs5 { Branch(DpRelative) = 0xDF, },
+    Bbs5 { Branch(DpRelative) @[Cmos] = 0xDF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs6 { Branch(DpRelative) = 0xEF, },
+    Bbs6 { Branch(DpRelative) @[Cmos] = 0xEF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs7 { Branch(DpRelative) = 0xFF, },
+    Bbs7 { Branch(DpRelative) @[Cmos] = 0xFF, },
 
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb0 { DirectPage(None) = 0x07, },
+    Rmb0 { DirectPage(None) @[Cmos] = 0x07, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb1 { DirectPage(None) = 0x17, },
+    Rmb1 { DirectPage(None) @[Cmos] = 0x17, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb2 { DirectPage(None) = 0x27, },
+    Rmb2 { DirectPage(None) @[Cmos] = 0x27, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb3 { DirectPage(None) = 0x37, },
+    Rmb3 { DirectPage(None) @[Cmos] = 0x37, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb4 { DirectPage(None) = 0x47, },
+    Rmb4 { DirectPage(None) @[Cmos] = 0x47, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb5 { DirectPage(None) = 0x57, },
+    Rmb5 { DirectPage(None) @[Cmos] = 0x57, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb6 { DirectPage(None) = 0x67, },
+    Rmb6 { DirectPage(None) @[Cmos] = 0x67, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb7 { DirectPage(None) = 0x77, },
+    Rmb7 { DirectPage(None) @[Cmos] = 0x77, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb0 { DirectPage(None) = 0x87, },
+    Smb0 { DirectPage(None) @[Cmos] = 0x87, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb1 { DirectPage(None) = 0x97, },
+    Smb1 { DirectPage(None) @[Cmos] = 0x97, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb2 { DirectPage(None) = 0xA7, },
+    Smb2 { DirectPage(None) @[Cmos] = 0xA7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb3 { DirectPage(None) = 0xB7, },
+    Smb3 { DirectPage(None) @[Cmos] = 0xB7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb4 { DirectPage(None) = 0xC7, },
+    Smb4 { DirectPage(None) @[Cmos] = 0xC7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb5 { DirectPage(None) = 0xD7, },
+    Smb5 { DirectPage(None) @[Cmos] = 0xD7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb6 { DirectPage(None) = 0xE7, },
+    Smb6 { DirectPage(None) @[Cmos] = 0xE7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb7 { DirectPage(None) = 0xF7, },
+    Smb7 { DirectPage(None) @[Cmos] = 0xF7, },
+
+    // 65C816 Opcodes /////////////////////////////////////////////////////////////////////////////
+    // TODO
 }

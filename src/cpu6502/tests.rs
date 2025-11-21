@@ -1019,6 +1019,19 @@ mod alu_accuracy {
     }
 
     #[test]
+    fn nmos_cmos_opcodes() {
+        use crate::isa::table::Mnemonic;
+        let (mut nmos_cpu, mut nmos_bus) = setup_nmos(0x8000, &[0xB2]);
+        let (mut cmos_cpu, mut cmos_bus) = setup_cmos(0x8000, &[0xB2]);
+        nmos_cpu.step(&mut nmos_bus);
+        cmos_cpu.step(&mut cmos_bus);
+        let nmos = nmos_cpu.current_inst.unwrap();
+        let cmos = cmos_cpu.current_inst.unwrap();
+        assert_eq!(nmos.mnemonic, Mnemonic::Undefined); // TODO: eventually will be replaced with cycle-accurate illegal op
+        assert_eq!(cmos.mnemonic, Mnemonic::Lda);
+    }
+
+    #[test]
     fn adc_status_flags() {
         const FLAG_MASK: u8 = N | Z | C | V;
 

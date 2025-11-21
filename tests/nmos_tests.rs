@@ -1,6 +1,6 @@
 use rs65x::{
     cpu6502::{Cpu6502, flavor::NMOS6502},
-    isa::table::Instruction,
+    isa::table::{Instruction, OpcodeTable},
 };
 use serde::Deserialize;
 use serde_json;
@@ -24,7 +24,7 @@ fn run_opcode(op: u8) -> Result<(), String> {
     let tests: Vec<SingleStepCase> =
         serde_json::from_str(&json).map_err(|_| "error reading json")?;
     assert!(!tests.is_empty(), "no tests found in JSON");
-    let inst = Instruction::from_byte(op);
+    let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
 
     println!("Starting {}, {}", inst.mnemonic, inst.address_mode);
     for test in &tests {

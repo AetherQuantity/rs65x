@@ -9,6 +9,7 @@
 use crate::isa::{
     Latch, OffsetType,
     microcycle::{AluOp, BusCycle, DecodeContext, MicroCode, MicroCycle, UcycQueue},
+    table::OpcodeTable,
 };
 
 /// Decimal (BCD) arithmetic semantics used by ADC/SBC when the D flag is set.
@@ -50,6 +51,9 @@ pub trait Flavor {
 
     /// Rockwell bit manipulation extensions.
     const HAS_ROCKWELL_OPS: bool; // RMB, SMB, BBR, BBS: setting, resetting, and testing bits in zp
+
+    /// Opcode decode table used by this flavor.
+    const OPCODE_TABLE: OpcodeTable;
 }
 
 /// While the cycle count between the 816 and 6502 remain the same (6), the cycles actually happen in a
@@ -183,6 +187,7 @@ impl Flavor for NMOS6502 {
     const HAS_STZ: bool = false;
     const HAS_WAI_STP: bool = false;
     const HAS_ROCKWELL_OPS: bool = false;
+    const OPCODE_TABLE: OpcodeTable = OpcodeTable::Nmos;
 }
 
 impl Flavor for CMOS65C02 {
@@ -198,6 +203,7 @@ impl Flavor for CMOS65C02 {
     const HAS_STZ: bool = true;
     const HAS_WAI_STP: bool = true;
     const HAS_ROCKWELL_OPS: bool = true;
+    const OPCODE_TABLE: OpcodeTable = OpcodeTable::Cmos;
 }
 
 impl Flavor for NES {
@@ -213,4 +219,5 @@ impl Flavor for NES {
     const HAS_STZ: bool = false;
     const HAS_WAI_STP: bool = false;
     const HAS_ROCKWELL_OPS: bool = false;
+    const OPCODE_TABLE: OpcodeTable = OpcodeTable::Nmos;
 }
