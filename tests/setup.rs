@@ -17,10 +17,10 @@ where
 
 #[derive(Deserialize, Debug, PartialEq, Eq)]
 pub struct Access {
-    addr: u16,
-    data: u8,
+    pub addr: u16,
+    pub data: u8,
     #[serde(deserialize_with = "de_read_write")]
-    access_type: AccessType,
+    pub access_type: AccessType,
 }
 
 pub struct Harness {
@@ -112,30 +112,6 @@ impl Access {
             data,
             access_type: AccessType::Write,
         }
-    }
-}
-
-pub struct InstructionTrace {
-    pub cycles: u64,
-    pub accesses: Vec<Access>,
-}
-
-impl InstructionTrace {
-    pub fn assert_accesses(&self, expected: Vec<Access>) {
-        let mut cycle = 0;
-        let expected_cycles = expected.len() as u64;
-        for e in expected {
-            assert_eq!(
-                e, self.accesses[cycle as usize],
-                "Access: Cycle {cycle} mismatch!"
-            );
-            cycle += 1;
-        }
-        assert!(
-            expected_cycles == self.cycles,
-            "All expected cycles matched, but {} extra cycles found.",
-            self.cycles - expected_cycles
-        );
     }
 }
 

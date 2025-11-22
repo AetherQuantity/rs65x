@@ -114,36 +114,14 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         use Mnemonic::*;
         let read = self.scratch.op0;
         match op {
-            Lda => {
-                self.a = read;
-                self.alu_set_zn(self.a);
-            }
-            Ldx => {
-                self.x = read;
-                self.alu_set_zn(self.x);
-            }
-            Ldy => {
-                self.y = read;
-                self.alu_set_zn(self.y);
-            }
-            And => {
-                self.a &= read;
-                self.alu_set_zn(self.a);
-            }
-            Eor => {
-                self.a ^= read;
-                self.alu_set_zn(self.a);
-            }
-            Ora => {
-                self.a |= read;
-                self.alu_set_zn(self.a);
-            }
-            Adc => {
-                self.execute_adc(read);
-            }
-            Sbc => {
-                self.execute_sbc(read);
-            }
+            Lda => self.a = self.alu_set_zn(read),
+            Ldx => self.x = self.alu_set_zn(read),
+            Ldy => self.y = self.alu_set_zn(read),
+            And => self.a = self.alu_set_zn(self.a & read),
+            Eor => self.a = self.alu_set_zn(self.a ^ read),
+            Ora => self.a = self.alu_set_zn(self.a | read),
+            Adc => execute_adc::<F, _>(self, read),
+            Sbc | Usbc => execute_sbc::<F, _>(self, read),
             Cmp | Cpx | Cpy => {
                 let byte = match op {
                     Cmp => self.a,
@@ -151,20 +129,118 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                     Cpy => self.y,
                     _ => unreachable!(),
                 };
-                let result = byte.wrapping_sub(read);
-                self.alu_set_zn(result);
+                self.alu_set_zn(byte.wrapping_sub(read));
                 self.alu_set_flag(psr::C, byte >= read);
             }
-            Pla | Plx | Ply => match op {
-                Pla => self.a = self.alu_set_zn(read),
-                Plx => self.x = self.alu_set_zn(read),
-                Ply => self.y = self.alu_set_zn(read),
-                _ => unreachable!(),
-            },
+            Pla => self.a = self.alu_set_zn(read),
+            Plx => self.x = self.alu_set_zn(read),
+            Ply => self.y = self.alu_set_zn(read),
+            Plp => self.p = (read | psr::U_6502) & !psr::B_6502,
             Bit => {
                 let status = self.p & !(psr::Z | psr::N | psr::V);
                 let z = psr::Z * if self.a & read == 0 { 1 } else { 0 };
                 self.p = status | z | (read & 0xC0);
+            }
+            Anc => {
+                self.a = self.alu_set_zn(self.a & read);
+                self.alu_set_flag(psr::C, self.a & 0x80 != 0);
+            }
+            Alr => {
+                self.a = self.alu_set_zn(self.a & read);
+                self.a = self.alu_lsr(self.a);
+            }
+            Arr => {
+                // Illegal ARR: (A & operand) then ROR with weird flag/decimal behaviour.
+                // For binary mode we use the commonly documented behaviour:
+                //   result = ROR(A & M)
+                //   N/Z from result
+                //   C = bit 6 of result
+                //   V = bit 6 XOR bit 5 of result
+                // For NMOS decimal mode we mirror the NESdev reference implementation.
+                let decimal_mode =
+                    (self.p & psr::D) != 0 && matches!(F::DECIMAL, DecimalSemantics::Nmos6502);
+
+                if !decimal_mode {
+                    // Binary (or NES-style no-decimal) behaviour.
+                    let result = self.alu_ror(self.a & read);
+                    // alu_ror already set Z/N from result.
+                    self.a = result;
+                    let c = (result & 0x40) != 0;
+                    let v = ((result >> 6) ^ (result >> 5)) & 1 != 0;
+                    self.alu_set_flag(psr::C, c);
+                    self.alu_set_flag(psr::V, v);
+                } else {
+                    // NMOS decimal-mode ARR, ported from NESdev's C reference
+                    // THANK YOU NESDEV
+                    let carry = self.alu_carry();
+                    let anded = self.a & read;
+                    let ah = anded >> 4;
+                    let al = anded & 0x0F;
+
+                    // Perform ROR(anded) with carry-in C, using the regular ALU helper.
+                    // This sets Z and a temporary N from the rotate result and C from bit 0.
+                    let mut a = self.alu_ror(anded);
+                    self.a = a;
+
+                    // Now impose ARR's odd flag behaviour:
+                    //   N = old carry
+                    //   Z = from result (already set by alu_ror)
+                    //   V = (t ^ A) & 0x40
+                    self.alu_set_flag(psr::N, carry);
+                    let v = ((anded ^ a) & 0x40) != 0;
+                    self.alu_set_flag(psr::V, v);
+
+                    // Decimal fixup for low nibble: if AL + (AL & 1) > 5 then add 6 to low nibble.
+                    if al.wrapping_add(al & 1) > 5 {
+                        a = (a & 0xF0) | (a.wrapping_add(6) & 0x0F);
+                    }
+
+                    // Decimal fixup for high nibble and final carry flag.
+                    let high_cond = ah.wrapping_add(ah & 1) > 5;
+                    if high_cond {
+                        a = a.wrapping_add(0x60);
+                    }
+                    self.a = a;
+                    self.alu_set_flag(psr::C, high_cond);
+                    // Note: N and Z remain as set immediately after the rotate,
+                    // matching the real NMOS behavior where BCD adjustment
+                    // does not update them.
+                }
+            }
+            Ane => {
+                // so... this opcode sucks.
+                // apparently there's a magic constant, quote:
+                //     The value of this constant depends on temerature, the chip series,
+                //     and maybe other factors, as well.
+                // the tests i downloaded, after trial and error, seem to expect 0xEE. so.. yeah.
+                let magic = 0xEE; // this is apparently the magic constant my tests expect
+                self.a = self.alu_set_zn((self.a | magic) & self.x & read);
+            }
+            Lxa => {
+                let magic = 0xEE;
+                self.a = self.alu_set_zn((self.a | magic) & read);
+                self.x = self.a;
+            }
+            Lax => {
+                self.a = self.alu_set_zn(read);
+                self.x = read;
+            }
+            Las => {
+                let result = self.alu_set_zn(read & self.s);
+                self.a = result;
+                self.x = result;
+                self.s = result;
+            }
+            Sbx => {
+                let result = self.a & self.x;
+                self.x = self.alu_set_zn(result.wrapping_sub(read));
+                self.alu_set_flag(psr::C, result >= read);
+            }
+            Brk => {
+                if matches!(F::DECIMAL, DecimalSemantics::Cmos65C02) {
+                    // on CMOS chips, interrupts clear the decimal flag!
+                    self.alu_set_flag(psr::D, false);
+                }
             }
             _ => {}
         }
@@ -184,10 +260,10 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             Sec => self.p |= psr::C,
             Sed => self.p |= psr::D,
             Sei => self.p |= psr::I,
-            Dex => self.x = self.x.wrapping_sub(1),
-            Dey => self.y = self.y.wrapping_sub(1),
-            Inx => self.x = self.x.wrapping_add(1),
-            Iny => self.y = self.y.wrapping_add(1),
+            Dex => self.x = self.alu_set_zn(self.x.wrapping_sub(1)),
+            Dey => self.y = self.alu_set_zn(self.y.wrapping_sub(1)),
+            Inx => self.x = self.alu_set_zn(self.x.wrapping_add(1)),
+            Iny => self.y = self.alu_set_zn(self.y.wrapping_add(1)),
             Tax => self.x = self.alu_set_zn(self.a),
             Tay => self.y = self.alu_set_zn(self.a),
             Tsx => self.x = self.alu_set_zn(self.s),
@@ -248,236 +324,161 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     #[inline(always)]
-    fn execute_adc(&mut self, operand: u8) {
-        let acc = self.a;
-        let carry_in = self.alu_carry();
-        let binary = Self::binary_add(acc, operand, carry_in);
-
-        if (self.p & psr::D) == 0 || matches!(F::DECIMAL, DecimalSemantics::None) {
-            self.finish_adc_binary(binary);
-            return;
-        }
-
-        let adjust = Self::decimal_adjust_add(acc, operand, carry_in, binary.sum);
-        match F::DECIMAL {
-            DecimalSemantics::Nmos6502 => {
-                self.finish_adc_decimal_nmos(acc, operand, binary, adjust);
-            }
-            DecimalSemantics::Cmos65C02 => {
-                self.finish_adc_decimal_cmos(binary, adjust);
-            }
-            DecimalSemantics::None => unreachable!(),
-        }
-    }
-
-    #[inline(always)]
-    fn finish_adc_binary(&mut self, binary: BinaryAddResult) {
-        self.finish_binary_result(binary.result, binary.carry, binary.overflow);
-    }
-
-    #[inline(always)]
-    fn finish_adc_decimal_nmos(
-        &mut self,
-        acc: u8,
-        operand: u8,
-        binary: BinaryAddResult,
-        adjust: DecimalAddAdjust,
-    ) {
-        self.a = adjust.result();
-        self.alu_set_flag(psr::C, adjust.carry());
-        let pre = adjust.pre_high();
-        self.alu_set_flag(psr::V, Self::adc_overflow(acc, operand, pre));
-        self.alu_set_flag(psr::N, (pre & psr::N) != 0);
-        self.alu_set_flag(psr::Z, binary.result == 0);
-    }
-
-    #[inline(always)]
-    fn finish_adc_decimal_cmos(&mut self, binary: BinaryAddResult, adjust: DecimalAddAdjust) {
-        let result = adjust.result();
-        self.a = result;
-        self.alu_set_flag(psr::C, adjust.carry());
-        self.alu_set_flag(psr::V, binary.overflow);
-        self.alu_set_flag(psr::Z, result == 0);
-        self.alu_set_flag(psr::N, (result & psr::N) != 0);
-    }
-
-    #[inline(always)]
-    fn decimal_adjust_add(acc: u8, operand: u8, carry_in: bool, sum: u16) -> DecimalAddAdjust {
-        let carry = u8::from(carry_in) as u16;
-        let low_sum = (acc & 0x0F) as u16 + (operand & 0x0F) as u16 + carry;
-        let mut adjusted = sum;
-        if low_sum > 9 {
-            adjusted = adjusted.wrapping_add(0x06);
-        }
-        let pre_high = adjusted as u8;
-        if adjusted > 0x99 {
-            adjusted = adjusted.wrapping_add(0x60);
-        }
-        DecimalAddAdjust {
-            pre_high,
-            result: adjusted as u8,
-            carry: adjusted > 0xFF,
-        }
-    }
-
-    #[inline(always)]
-    fn adc_overflow(acc: u8, operand: u8, result: u8) -> bool {
-        ((acc ^ result) & 0x80) != 0 && ((acc ^ operand) & 0x80) == 0
-    }
-
-    #[inline(always)]
-    fn execute_sbc(&mut self, operand: u8) {
-        let acc = self.a;
-        let carry_in = self.alu_carry();
-        let inverted = operand ^ 0xFF;
-        let binary = Self::binary_add(acc, inverted, carry_in);
-        let overflow = Self::sbc_overflow(acc, operand, binary.result);
-
-        if (self.p & psr::D) == 0 || matches!(F::DECIMAL, DecimalSemantics::None) {
-            self.finish_binary_result(binary.result, binary.carry, overflow);
-            return;
-        }
-
-        let adjust = Self::decimal_adjust_sub(acc, operand, carry_in, binary.result);
-        match F::DECIMAL {
-            DecimalSemantics::Nmos6502 => {
-                self.finish_sbc_decimal_nmos(binary, overflow, adjust);
-            }
-            DecimalSemantics::Cmos65C02 => {
-                self.finish_sbc_decimal_cmos(binary.carry, overflow, adjust);
-            }
-            DecimalSemantics::None => {
-                self.finish_binary_result(binary.result, binary.carry, overflow);
-            }
-        }
-    }
-
-    #[inline(always)]
-    fn finish_sbc_decimal_nmos(
-        &mut self,
-        binary: BinaryAddResult,
-        overflow: bool,
-        adjust: DecimalSubAdjust,
-    ) {
-        self.a = adjust.result();
-        self.alu_set_flag(psr::C, binary.carry);
-        self.alu_set_flag(psr::V, overflow);
-        self.alu_set_flag(psr::N, (binary.result & psr::N) != 0);
-        self.alu_set_flag(psr::Z, binary.result == 0);
-    }
-
-    #[inline(always)]
-    fn finish_sbc_decimal_cmos(&mut self, carry: bool, overflow: bool, adjust: DecimalSubAdjust) {
-        let result = adjust.result();
-        self.a = result;
-        self.alu_set_flag(psr::C, carry);
-        self.alu_set_flag(psr::V, overflow);
-        self.alu_set_flag(psr::Z, result == 0);
-        self.alu_set_flag(psr::N, (result & psr::N) != 0);
-    }
-
-    #[inline(always)]
-    fn decimal_adjust_sub(
-        acc: u8,
-        operand: u8,
-        carry_in: bool,
-        binary_result: u8,
-    ) -> DecimalSubAdjust {
-        let borrow = if carry_in { 0u16 } else { 1u16 };
-        let mut result = binary_result;
-        let low_acc = (acc & 0x0F) as u16;
-        let low_op = (operand & 0x0F) as u16;
-        if low_acc < low_op + borrow {
-            result = result.wrapping_sub(0x06);
-        }
-        let acc16 = acc as u16;
-        let op16 = operand as u16;
-        if acc16 < op16 + borrow {
-            result = result.wrapping_sub(0x60);
-        }
-        DecimalSubAdjust { result }
-    }
-
-    #[inline(always)]
-    fn sbc_overflow(acc: u8, operand: u8, result: u8) -> bool {
-        ((acc ^ operand) & (acc ^ result) & 0x80) != 0
-    }
-
-    #[inline(always)]
-    fn finish_binary_result(&mut self, result: u8, carry: bool, overflow: bool) {
-        self.a = result;
-        self.alu_set_flag(psr::C, carry);
-        self.alu_set_flag(psr::V, overflow);
-        self.alu_set_zn(result);
-    }
-
-    #[inline(always)]
-    fn binary_add(lhs: u8, rhs: u8, carry_in: bool) -> BinaryAddResult {
-        let carry = u8::from(carry_in) as u16;
-        let sum = lhs as u16 + rhs as u16 + carry;
-        let result = sum as u8;
-        BinaryAddResult {
-            sum,
-            result,
-            carry: sum > 0xFF,
-            overflow: Self::adc_overflow(lhs, rhs, result),
-        }
-    }
-
-    #[inline(always)]
     fn tick(&mut self, wait: u8) {
         self.cycles += 1 + wait as u64;
     }
 }
 
-#[derive(Clone, Copy)]
-struct BinaryAddResult {
-    sum: u16,
-    result: u8,
-    carry: bool,
-    overflow: bool,
+pub(crate) fn execute_adc<F: Flavor, S: AluOps>(state: &mut S, operand: u8) {
+    let v_flag = |lhs, rhs, result| ((lhs ^ result) & 0x80) != 0 && ((lhs ^ rhs) & 0x80) == 0;
+    let decimal = (state.status() & psr::D) != 0;
+    let acc = state.accumulator();
+    let carry = u16::from(state.alu_carry());
+    let sum = acc as u16 + operand as u16 + carry;
+    let bin_result = sum as u8;
+    let binary_overflow = v_flag(acc, operand, bin_result);
+    if !decimal || matches!(F::DECIMAL, DecimalSemantics::None) {
+        // if we're in binary mode, we're done!
+        state.set_accumulator(bin_result);
+        state.alu_set_flag(psr::C, sum > 0xFF);
+        state.alu_set_flag(psr::V, binary_overflow);
+        state.alu_set_zn(bin_result);
+        return;
+    }
+    // otherwise, we need to adjust for decimal mode
+    let mut low = (acc & 0x0F) as u16 + (operand & 0x0F) as u16 + carry;
+    let mut high = (acc >> 4) as u16 + (operand >> 4) as u16 + u16::from(low > 9);
+    if low > 9 {
+        low += 6;
+    }
+    let compose = |hi: u16, lo: u16| -> u8 { (((hi << 4) | (lo & 0x0F)) & 0xFF) as u8 };
+    let pre_high = compose(high, low);
+    if high > 9 {
+        high += 6;
+    }
+    let carry_out = high > 0x0F;
+    let dec_result = compose(high, low);
+    state.set_accumulator(dec_result);
+    state.alu_set_flag(psr::C, carry_out);
+    match F::DECIMAL {
+        DecimalSemantics::Nmos6502 => {
+            state.alu_set_flag(psr::Z, bin_result == 0);
+            state.alu_set_flag(psr::V, v_flag(acc, operand, pre_high));
+            state.alu_set_flag(psr::N, (pre_high & psr::N) != 0);
+        }
+        DecimalSemantics::Cmos65C02 => {
+            state.alu_set_flag(psr::Z, dec_result == 0);
+            state.alu_set_flag(psr::V, binary_overflow);
+            state.alu_set_flag(psr::N, (dec_result & psr::N) != 0);
+        }
+        DecimalSemantics::None => unreachable!(),
+    }
 }
 
-#[derive(Clone, Copy)]
-struct DecimalAddAdjust {
-    pre_high: u8,
-    result: u8,
-    carry: bool,
-}
+pub(crate) fn execute_sbc<F: Flavor, S: AluOps>(state: &mut S, operand: u8) {
+    // We implement SBC as A + (~operand) + C, mirroring execute_adc's structure
+    // and then apply optional BCD correction depending on DecimalSemantics.
+    let v_flag =
+        |lhs: u8, rhs: u8, result: u8| ((lhs ^ result) & 0x80) != 0 && ((lhs ^ rhs) & 0x80) == 0;
 
-impl DecimalAddAdjust {
-    #[inline(always)]
-    fn result(self) -> u8 {
-        self.result
+    let decimal = (state.status() & psr::D) != 0;
+    let acc = state.accumulator();
+    let carry = if state.alu_carry() { 1u16 } else { 0u16 };
+
+    // Binary core: A + (~M) + C
+    let value = operand ^ 0xFF;
+    let sum = acc as u16 + value as u16 + carry;
+    let bin_result = sum as u8;
+    let binary_overflow = v_flag(acc, value, bin_result);
+
+    // If decimal mode is disabled or we model a CPU without decimal support,
+    // this is just plain binary SBC.
+    if !decimal || matches!(F::DECIMAL, DecimalSemantics::None) {
+        state.set_accumulator(bin_result);
+        state.alu_set_flag(psr::C, sum > 0xFF);
+        state.alu_set_flag(psr::V, binary_overflow);
+        state.alu_set_zn(bin_result);
+        return;
     }
 
-    #[inline(always)]
-    fn carry(self) -> bool {
-        self.carry
-    }
+    match F::DECIMAL {
+        // NMOS 6502: perform nibble-wise BCD subtraction (including invalid digits),
+        // but set flags from the *binary* core result (like real hardware).
+        DecimalSemantics::Nmos6502 => {
+            let a = acc;
+            let carry_in = state.alu_carry(); // C = 1 means "no borrow"
 
-    #[inline(always)]
-    fn pre_high(self) -> u8 {
-        self.pre_high
+            // Low nibble: (A_lo - M_lo - !C), with wrap and BCD correction.
+            let mut tmp =
+                (a & 0x0F) as i16 - (operand & 0x0F) as i16 - if carry_in { 0 } else { 1 };
+            if tmp < 0 {
+                // Wrap back into the 0–15 range, then subtract 6 for BCD,
+                // and propagate a borrow into the high nibble via -0x10.
+                tmp = ((tmp - 6) & 0x0F) - 0x10;
+            }
+
+            // High nibble: (A_hi - M_hi + low_nibble_result), again with wrap fixup.
+            tmp = (a & 0xF0) as i16 - (operand & 0xF0) as i16 + tmp;
+            if tmp < 0 {
+                tmp -= 0x60;
+            }
+
+            let dec_result = (tmp as u8) & 0xFF;
+            state.set_accumulator(dec_result);
+
+            // Flags are taken from the binary SBC core (sum/bin_result/binary_overflow).
+            state.alu_set_flag(psr::C, sum > 0xFF);
+            state.alu_set_flag(psr::V, binary_overflow);
+            state.alu_set_zn(bin_result);
+        }
+
+        // 65C02: keep the simpler "good BCD" behaviour for now — treat A and operand
+        // as packed BCD 00–99, do base‑10 subtraction, then convert back.
+        DecimalSemantics::Cmos65C02 => {
+            let a_tens = (acc >> 4) & 0x0F;
+            let a_ones = acc & 0x0F;
+            let m_tens = (operand >> 4) & 0x0F;
+            let m_ones = operand & 0x0F;
+
+            let a_dec = (a_tens as i16) * 10 + (a_ones as i16);
+            let m_dec = (m_tens as i16) * 10 + (m_ones as i16);
+            let borrow = if state.alu_carry() { 0i16 } else { 1i16 }; // C=1 means "no borrow"
+
+            let mut diff = a_dec - m_dec - borrow;
+            let carry_out = diff >= 0;
+            if diff < 0 {
+                // Wrap into the 0–99 range, modelling the fact we only keep two BCD digits.
+                diff += 100;
+            }
+
+            let dec_u8 = diff as u8; // now in 0–99
+            let tens = dec_u8 / 10;
+            let ones = dec_u8 % 10;
+            let dec_result = (tens << 4) | ones;
+
+            state.set_accumulator(dec_result);
+            state.alu_set_flag(psr::C, carry_out);
+
+            // 65C02: Z/N come from the *decimal* result, V from the binary overflow.
+            state.alu_set_flag(psr::Z, dec_result == 0);
+            state.alu_set_flag(psr::V, binary_overflow);
+            state.alu_set_flag(psr::N, (dec_result & psr::N) != 0);
+        }
+
+        DecimalSemantics::None => unreachable!(),
     }
 }
 
-#[derive(Clone, Copy)]
-struct DecimalSubAdjust {
-    result: u8,
-}
-
-impl DecimalSubAdjust {
-    #[inline(always)]
-    fn result(self) -> u8 {
-        self.result
-    }
-}
-
-trait AluOps {
+pub(crate) trait AluOps {
     fn status(&self) -> u8;
     fn status_mut(&mut self) -> &mut u8;
     fn accumulator(&self) -> u8;
+    fn accumulator_mut(&mut self) -> &mut u8;
+
+    #[inline(always)]
+    fn set_accumulator(&mut self, value: u8) {
+        *self.accumulator_mut() = value;
+    }
 
     #[inline(always)]
     fn alu_set_flag(&mut self, mask: u8, value: bool) {
@@ -593,6 +594,11 @@ impl<F: Flavor, B: Bus> AluOps for Cpu6502<F, B> {
     fn accumulator(&self) -> u8 {
         self.a
     }
+
+    #[inline(always)]
+    fn accumulator_mut(&mut self) -> &mut u8 {
+        &mut self.a
+    }
 }
 
 struct MicroCtx6502<'a, F: Flavor, B: Bus> {
@@ -663,6 +669,11 @@ impl<'a, F: Flavor, B: Bus> AluOps for MicroCtx6502<'a, F, B> {
     fn accumulator(&self) -> u8 {
         *self.a
     }
+
+    #[inline(always)]
+    fn accumulator_mut(&mut self) -> &mut u8 {
+        &mut *self.a
+    }
 }
 
 impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
@@ -709,7 +720,7 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
 
     #[inline(always)]
     fn set_status(&mut self, value: u8) {
-        *self.status = value;
+        *self.status = (value | psr::U_6502) & !psr::B_6502;
     }
 
     #[inline(always)]
@@ -720,6 +731,11 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
     #[inline(always)]
     fn reg_y(&self) -> u16 {
         (*self.y) as u16
+    }
+
+    #[inline(always)]
+    fn reg_a(&self) -> u16 {
+        (*self.a) as u16
     }
 
     #[inline(always)]
@@ -766,6 +782,22 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
             Sty | Phy => scratch.data_latch = *self.y,
             Stz => scratch.data_latch = 0,
             Php => scratch.data_latch = *self.status | psr::B_6502,
+            Sax => scratch.data_latch = *self.a & *self.x,
+            Sha => {
+                scratch.data_latch = h_plus_one_nonsense(&mut scratch.ea, *self.a, *self.y, *self.x)
+            }
+            Tas => {
+                let ax = *self.a & *self.x;
+                *self.sp = ax;
+                scratch.data_latch =
+                    h_plus_one_nonsense(&mut scratch.ea, *self.a, *self.y, *self.x);
+            }
+            Shy => {
+                scratch.data_latch = h_plus_one_nonsense(&mut scratch.ea, 0xFF, *self.x, *self.y);
+            }
+            Shx => {
+                scratch.data_latch = h_plus_one_nonsense(&mut scratch.ea, 0xFF, *self.y, *self.x);
+            }
             _ => {}
         }
     }
@@ -782,6 +814,33 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
             Dec => scratch.op0 = self.alu_dec(scratch.op0),
             Tsb => scratch.op0 = self.alu_tsb(scratch.op0),
             Trb => scratch.op0 = self.alu_trb(scratch.op0),
+            // NMOS illegal opcodes:
+            Slo => {
+                scratch.op0 = self.alu_asl(scratch.op0); // will be written back
+                *self.a = self.alu_set_zn(*self.a | scratch.op0);
+            }
+            Rla => {
+                scratch.op0 = self.alu_rol(scratch.op0); // will be written back
+                *self.a = self.alu_set_zn(*self.a & scratch.op0);
+            }
+            Sre => {
+                scratch.op0 = self.alu_lsr(scratch.op0); // will be written back
+                *self.a = self.alu_set_zn(*self.a ^ scratch.op0);
+            }
+            Rra => {
+                scratch.op0 = self.alu_ror(scratch.op0);
+                execute_adc::<F, _>(self, scratch.op0);
+            }
+            Dcp => {
+                let result = scratch.op0.wrapping_sub(1);
+                scratch.op0 = result;
+                self.alu_set_zn(self.a.wrapping_sub(result));
+                self.alu_set_flag(psr::C, *self.a >= result);
+            }
+            Isc => {
+                scratch.op0 = scratch.op0.wrapping_add(1);
+                execute_sbc::<F, _>(self, scratch.op0);
+            }
             _ => {
                 if let Some(bit) = Self::bit_index_rmb(self.opcode) {
                     scratch.op0 = self.alu_clear_bit(scratch.op0, bit);
@@ -817,4 +876,20 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
             }
         }
     }
+}
+
+fn h_plus_one_nonsense(ea: &mut u32, a: u8, offset: u8, op_reg: u8) -> u8 {
+    // this opcode was the bane of my existence to implement. holy moly.
+    let eff_lo = ea.clone() as u8;
+    let wrapped = eff_lo < offset; // we need the pre-fixed hi byte. subtract if we previously overflowed
+    let eff_hi = ((ea.clone() >> 8) as u8).wrapping_sub(if wrapped { 1 } else { 0 });
+    // base value: A & X & (H+1)
+    let value = a & op_reg & eff_hi.wrapping_add(1);
+    // so.
+    // apparently the address to write to is INSANE here, if we wrapped to get here, the value we're
+    // writing becomes the high byte of the address to write to. otherwise, same page high byte. i think.
+    let store_hi = if wrapped { value } else { eff_hi };
+    let target_addr = ((store_hi as u16) << 8) | eff_lo as u16;
+    *ea = target_addr as u32;
+    value
 }

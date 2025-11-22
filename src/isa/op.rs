@@ -51,6 +51,7 @@ pub trait MicroContext {
 
     fn reg_x(&self) -> u16;
     fn reg_y(&self) -> u16;
+    fn reg_a(&self) -> u16;
 
     fn direct_page_base(&self) -> u16 {
         0
@@ -129,7 +130,7 @@ impl MicroExecutor {
                 let target_ea = self.ea.wrapping_add(offset as u32);
                 self.ea = (self.ea & !0xFF) | (ea_lo.wrapping_add(offset as u8) as u32);
                 if self.ea != target_ea {
-                    println!("ea {} != target ea {target_ea}", self.ea);
+                    //println!("ea {} != target ea {target_ea}", self.ea);
                     fixed_addr = Some(target_ea)
                 }
             }
@@ -192,7 +193,7 @@ impl MicroExecutor {
             AluOp::Branch => {
                 if ctx.alu_branch(self, queue) {
                     // branch taken!
-                    println!("branch taken!");
+                    //println!("branch taken!");
                     // we need to figure out if we are branching to the same page or a different one
                     let new_pc = ctx.pc().wrapping_add_signed(self.signed_offset8 as i16);
                     let maybe_invalid = (ctx.pc() & 0xFF00) | (new_pc & 0xFF);
@@ -206,7 +207,7 @@ impl MicroExecutor {
                     // then, stick a fork in us, we're done
                     queue.push(MicroCycle::opcode_fetch());
                 } else {
-                    println!("branch not taken!");
+                    //println!("branch not taken!");
                     // branch not taken! next cycle is opcode fetch
                     queue.push(MicroCycle::opcode_fetch())
                 }

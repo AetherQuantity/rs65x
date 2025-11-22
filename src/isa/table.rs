@@ -19,8 +19,12 @@ const fn action_for_mnemonic(mnemonic: Mnemonic) -> MemoryAction {
     match mnemonic {
         Lda | Ldx | Ldy | And | Eor | Ora | Adc | Sbc | Cmp | Cpx | Cpy | Bit | Pla | Plp | Plx
         | Ply => MemoryAction::Read,
-        Sta | Stx | Sty | Stz | Pha | Php | Phx | Phy => MemoryAction::Write,
-        Asl | Lsr | Rol | Ror | Inc | Dec | Tsb | Trb => MemoryAction::ReadModifyWrite,
+        Sta | Stx | Sty | Stz | Pha | Php | Phx | Phy | Sax | Sha | Tas | Shy | Shx => {
+            MemoryAction::Write
+        }
+        Asl | Lsr | Rol | Ror | Inc | Dec | Tsb | Trb | Slo | Rla | Sre | Rra | Dcp | Isc => {
+            MemoryAction::ReadModifyWrite
+        }
         // R65C02 instructions
         Bbr0 | Bbr1 | Bbr2 | Bbr3 | Bbr4 | Bbr5 | Bbr6 | Bbr7 | Bbs0 | Bbs1 | Bbs2 | Bbs3
         | Bbs4 | Bbs5 | Bbs6 | Bbs7 => MemoryAction::Read,
@@ -851,7 +855,7 @@ define_opcodes! {
     /// Illegal.
     Lax {
         DirectPage(None) @[Nmos] = 0xA7,
-        DirectPage(X)    @[Nmos] = 0xB7,
+        DirectPage(Y)    @[Nmos] = 0xB7,
         Absolute(None)   @[Nmos] = 0xAF,
         Absolute(Y)      @[Nmos] = 0xBF,
         DpIndirect(X)    @[Nmos] = 0xA3,
@@ -923,7 +927,7 @@ define_opcodes! {
     ///
     /// unstable: sometimes 'AND (H+1)' is dropped, page boundary crossings may not work (with
     /// the high-byte of the value used as the high-byte of the address)
-    Shy { Absolute(Y) @[Nmos] = 0x9C, },
+    Shy { Absolute(X) @[Nmos] = 0x9C, },
 
     /// # SLO (ASO): ASL + ORA
     /// Illegal.

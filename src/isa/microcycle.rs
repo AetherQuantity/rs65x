@@ -488,4 +488,8 @@ pub trait MicroCode {
     fn emit_jam(_queue: &mut UcycQueue, _ctx: DecodeContext) {
         unreachable!("JAM only occurs on NMOS6502-based cores");
     }
+
+    fn emit_cmos_nop(_queue: &mut UcycQueue, _ctx: DecodeContext, _bytes: u8, _cycles: u8) {
+        unreachable!("CMOS NOPs only work on CMOS");
+    }
 }

@@ -185,6 +185,8 @@ pub enum AddressMode {
     ///
     /// 65C816 only.
     StackRelative(OffsetType),
+
+    CmosNop(u8, u8),
 }
 
 impl fmt::Display for AddressMode {
@@ -213,6 +215,7 @@ impl fmt::Display for AddressMode {
             Branch(BranchType::DpRelative) => write!(f, "Branch DpRel"),
             Stack => write!(f, "Stack"),
             Jam => write!(f, "Jam"),
+            CmosNop(bytes, cycles) => write!(f, "CMOS Nop, {bytes} bytes, {cycles} cycles"),
 
             // 16-bit
             Jump(JumpType::JmpIndirectLong) => write!(f, "JmpIndirectLong"),
@@ -274,6 +277,7 @@ impl AddressMode {
             AddressMode::Branch(BranchType::DpRelative) => M::emit_branch_dprel(queue, ctx),
             AddressMode::Branch(BranchType::Relative) => M::emit_branch_rel(queue, ctx),
             AddressMode::Jam => M::emit_jam(queue, ctx),
+            AddressMode::CmosNop(bytes, cycles) => M::emit_cmos_nop(queue, ctx, bytes, cycles),
             // 16-bit only:
             AddressMode::Branch(BranchType::RelativeLong) => todo!(),
             AddressMode::AbsoluteLong(_offset_type) => todo!(),

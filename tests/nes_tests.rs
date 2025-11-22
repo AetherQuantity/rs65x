@@ -1,5 +1,5 @@
 use rs65x::{
-    cpu6502::{Cpu6502, flavor::NMOS6502},
+    cpu6502::{Cpu6502, flavor::NES},
     isa::table::{Instruction, OpcodeTable},
 };
 use serde_json;
@@ -22,7 +22,7 @@ fn run_all() {
 }
 
 fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
-    let path = format!("tests/nmos/{op:02X}.json");
+    let path = format!("tests/nes6502/{op:02X}.json");
     let json = fs::read_to_string(&path).map_err(|_| "opcode not found")?;
     // The top-level JSON is an array of test cases
     let tests: Vec<SingleStepCase> =
@@ -47,8 +47,8 @@ fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
     Ok(())
 }
 
-pub fn setup_initial(initial: &State) -> (Cpu6502<NMOS6502, Harness>, Harness) {
-    let mut cpu = Cpu6502::<NMOS6502, Harness>::new();
+pub fn setup_initial(initial: &State) -> (Cpu6502<NES, Harness>, Harness) {
+    let mut cpu = Cpu6502::<NES, Harness>::new();
     cpu.pc = initial.pc;
     cpu.a = initial.a;
     cpu.s = initial.s;
@@ -87,7 +87,7 @@ pub fn assert_cycle(expected: &Access, actual: &Access) {
     );
 }
 
-pub fn assert_final(cpu: &Cpu6502<NMOS6502, Harness>, bus: &Harness, fin: &State) {
+pub fn assert_final(cpu: &Cpu6502<NES, Harness>, bus: &Harness, fin: &State) {
     assert!(
         cpu.pc == fin.pc,
         "PC mismatch: Expected {:04X}, Actual {:04X}",
