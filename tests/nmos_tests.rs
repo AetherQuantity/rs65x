@@ -12,13 +12,18 @@ mod setup;
 #[test]
 fn run_all() {
     for op in 0x00..=0xFF {
-        let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
+        let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
         println!(
             "Starting [{op:02X}] {}, {}",
             inst.mnemonic, inst.address_mode,
         );
         run_opcode(op, false).unwrap_or_default();
     }
+}
+
+#[test]
+fn run_single() {
+    run_opcode(0x03, true).unwrap_or_default();
 }
 
 fn run_opcode(op: u8, debug: bool) -> Result<(), String> {

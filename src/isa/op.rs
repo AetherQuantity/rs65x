@@ -43,6 +43,8 @@ pub trait MicroContext {
     fn set_pc_lo(&mut self, value: u8);
     fn inc_pc(&mut self);
 
+    fn opcode(&self) -> u8;
+
     fn sp(&self) -> u8;
     fn set_sp(&mut self, value: u8);
 
@@ -75,6 +77,11 @@ pub trait MicroContext {
         false
     }
 
+    #[inline(always)]
+    fn read_invalid_on_page_cross(&self) -> bool {
+        false
+    }
+
     /// Prepare the value that should be written to memory for store-style instructions, and store in data latch.
     fn alu_prepare_store(&mut self, scratch: &mut MicroExecutor);
 
@@ -88,12 +95,15 @@ pub trait MicroContext {
 impl MicroExecutor {
     #[inline(always)]
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            ea: 0x7F,
+            ..Default::default()
+        }
     }
 
     #[inline(always)]
     pub fn reset(&mut self) {
-        *self = Self::default();
+        *self = Self::new();
     }
 
     pub fn execute_next<C: MicroContext, B: Bus>(
@@ -131,6 +141,11 @@ impl MicroExecutor {
                 self.ea = (self.ea & !0xFF) | (ea_lo.wrapping_add(offset as u8) as u32);
                 if self.ea != target_ea {
                     //println!("ea {} != target ea {target_ea}", self.ea);
+                    if !ctx.read_invalid_on_page_cross() {
+                        // on CMOS chips we don't do a read of the invalid location!
+                        // instead, we read the current pc again
+                        self.ea = (ctx.pc() as u32).wrapping_sub(1);
+                    }
                     fixed_addr = Some(target_ea)
                 }
             }
@@ -178,6 +193,12 @@ impl MicroExecutor {
                     // and clears everything after it
                     queue.insert(MicroCycle::opcode_fetch());
                     // on writes and RMW's, we do the extra cycle even when addr is correct
+                } else if self.memory_action == MemoryAction::ReadModifyWrite
+                    && !ctx.read_invalid_on_page_cross()
+                {
+                    // on CMOS, we can skip the Read phase of our read-modify-write, because we just read and there
+                    // was no page cross shenanigans
+                    queue.pop();
                 }
             }
             AluOp::IncLatch(latch) => self.add_offset(ctx, latch, 1),
@@ -198,10 +219,19 @@ impl MicroExecutor {
                     let new_pc = ctx.pc().wrapping_add_signed(self.signed_offset8 as i16);
                     let maybe_invalid = (ctx.pc() & 0xFF00) | (new_pc & 0xFF);
                     // regardless of whether the address is valid or not, we set the PC to it on this cycle:
-                    queue.push(MicroCycle::read_pc_set_pc(maybe_invalid));
+
                     if new_pc != maybe_invalid {
                         // the address was invalid! luckily we know what the valid address is, let's spend another cycle
                         // fixing it!
+                        if ctx.opcode() & 0x0F == 0x0F {
+                            // on CMOS BBR/BBS instructions we read the PC again as we fix the Ea internally
+                            queue.push(MicroCycle::read(Latch::Pc, Latch::None, false));
+                        } else {
+                            // otherwise, we read the invalid locations
+                            queue.push(MicroCycle::read_pc_set_pc(maybe_invalid));
+                        }
+                        queue.push(MicroCycle::read_pc_set_pc(new_pc));
+                    } else {
                         queue.push(MicroCycle::read_pc_set_pc(new_pc));
                     }
                     // then, stick a fork in us, we're done
@@ -217,6 +247,13 @@ impl MicroExecutor {
                 // decreasing the cursor in the queue guarantees that this same uCycle will be
                 // executed next cycle
                 queue.dec_head();
+            }
+            AluOp::FixPtr => {
+                if self.ptr & 0xFF == 0 {
+                    // we overflowed when we inc'd!! we need to add 0x100 to ptr to get to
+                    // the right addr
+                    self.ptr += 0x100;
+                }
             }
         }
         StepResult::Pending

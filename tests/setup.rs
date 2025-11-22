@@ -65,7 +65,7 @@ impl Bus for Harness {
         let addr16 = addr as u16;
         let data = self.mem[addr16 as usize];
         if self.debug_print {
-            println!("read access at {addr:#04X} | data = {data:#04X}");
+            println!("read access at {addr:#06X} | data = {data:#04X}");
         }
         self.last = Access {
             addr: addr16,
@@ -78,7 +78,7 @@ impl Bus for Harness {
 
     fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) -> WaitStates {
         if self.debug_print {
-            println!("write access at {addr:#04X} | data = {data:#04X}");
+            println!("write access at {addr:#06X} | data = {data:#04X}");
         }
         let access_type = AccessType::Write;
         let addr16 = addr as u16;

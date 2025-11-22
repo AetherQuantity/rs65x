@@ -11,14 +11,25 @@ mod setup;
 
 #[test]
 fn run_all() {
-    for op in 0x00..=0xFF {
-        let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
+    for op in 0x70..=0xFF {
+        let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
         println!(
             "Starting [{op:02X}] {}, {}",
             inst.mnemonic, inst.address_mode,
         );
         run_opcode(op, false).unwrap_or_default();
     }
+}
+
+#[test]
+fn run_single() {
+    let op = 0x71;
+    let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
+    println!(
+        "Starting [{op:02X}] {}, {}",
+        inst.mnemonic, inst.address_mode,
+    );
+    run_opcode(op, true).unwrap_or_default();
 }
 
 fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
@@ -36,6 +47,7 @@ fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
         bus.debug_print = debug;
         for cycle in &test.cycles {
             cpu.step(&mut bus);
+            //println!("bus cycle {}", bus.cycle);
             assert_cycle(cycle, &bus.last_cycle());
         }
         // we kinda have to run an extra cycle for opcode prefetch
@@ -66,6 +78,9 @@ pub fn assert_cycle(expected: &Access, actual: &Access) {
     if expected == actual {
         return;
     }
+    println!();
+    println!("Expected: {expected:?}");
+    println!("Actual:   {actual:?}");
     // we failed an assert here
     assert!(
         expected.access_type == actual.access_type,

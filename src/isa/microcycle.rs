@@ -104,6 +104,7 @@ pub enum AluOp {
     Branch,
     SetPc(u16),
     Jam,
+    FixPtr,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -256,6 +257,32 @@ impl MicroCycle {
             inc_src: false,
             local_latch: Latch::None,
             alu: AluOp::DecSp,
+        }
+    }
+    pub const fn read_ptr1(dest: Latch) -> Self {
+        MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Ptr,
+                vda: true,
+                vpa: false,
+                read: true,
+            },
+            inc_src: false,
+            local_latch: dest,
+            alu: AluOp::IncLatch(Latch::PtrLo),
+        }
+    }
+    pub const fn read_inv_ptr2() -> Self {
+        MicroCycle {
+            bus: BusCycle {
+                addr: Latch::Ptr, // invalid address!
+                vda: true,
+                vpa: false,
+                read: true,
+            },
+            inc_src: false,
+            local_latch: Latch::None,
+            alu: AluOp::FixPtr,
         }
     }
 }
@@ -443,6 +470,7 @@ pub trait MicroCode {
 
     fn emit_branch_dprel(queue: &mut UcycQueue, _ctx: DecodeContext) {
         queue.push(MicroCycle::read(Latch::Pc, Latch::EaLo, true));
+        queue.push(MicroCycle::read(Latch::Ea, Latch::Op0, false));
         queue.push(MicroCycle::read(Latch::Ea, Latch::Op0, false));
         queue.push(MicroCycle {
             bus: BusCycle {

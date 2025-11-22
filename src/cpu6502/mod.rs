@@ -12,7 +12,7 @@ use core::marker::PhantomData;
 
 use crate::bus::Bus;
 use crate::isa::JumpType;
-use crate::isa::microcycle::{DecodeContext, UcycQueue};
+use crate::isa::microcycle::{DecodeContext, MicroCycle, UcycQueue};
 use crate::isa::op::{MicroContext, MicroExecutor, StepResult};
 use crate::isa::table::{Instruction, Mnemonic};
 use crate::isa::{AddressMode, address_mode_subtypes::NoMemType};
@@ -35,6 +35,7 @@ pub struct Cpu6502<F: Flavor, B: Bus> {
     scratch: MicroExecutor,
     current_inst: Option<Instruction>,
     current_opcode: u8,
+    extra_adc_sbc_cycle: bool,
     _f: PhantomData<(F, B)>,
 }
 
@@ -53,6 +54,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             scratch: MicroExecutor::new(),
             current_inst: None,
             current_opcode: 0,
+            extra_adc_sbc_cycle: false,
             _f: PhantomData,
         }
     }
@@ -260,8 +262,10 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             Sec => self.p |= psr::C,
             Sed => self.p |= psr::D,
             Sei => self.p |= psr::I,
+            Dec => self.a = self.alu_set_zn(self.a.wrapping_sub(1)),
             Dex => self.x = self.alu_set_zn(self.x.wrapping_sub(1)),
             Dey => self.y = self.alu_set_zn(self.y.wrapping_sub(1)),
+            Inc => self.a = self.alu_set_zn(self.a.wrapping_add(1)),
             Inx => self.x = self.alu_set_zn(self.x.wrapping_add(1)),
             Iny => self.y = self.alu_set_zn(self.y.wrapping_add(1)),
             Tax => self.x = self.alu_set_zn(self.a),
@@ -304,6 +308,21 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         if matches!(result, StepResult::InstructionFinished) {
             // for read instructions, the byte is stored in Op0
             if instruction.memory_action == crate::isa::MemoryAction::Read {
+                if matches!(instruction.mnemonic, Mnemonic::Adc | Mnemonic::Sbc)
+                    && F::DECIMAL == DecimalSemantics::Cmos65C02
+                    && self.p & psr::D != 0
+                    && !self.extra_adc_sbc_cycle
+                {
+                    // we need to cram another cycle in here. CMOS adds another cycle on ADC and SBC in order to
+                    // give itself enough time to actually do all the flags correctly
+                    self.ucycs.push(MicroCycle::opcode_fetch());
+                    self.extra_adc_sbc_cycle = true;
+                    // still have to do our bus read though
+                    let (_data, wait) = bus.read(self.scratch.ea, false, true);
+                    self.tick(wait);
+                    return StepResult::Pending;
+                }
+                self.extra_adc_sbc_cycle = false;
                 self.finish_read(instruction.mnemonic);
             }
             match instruction.address_mode {
@@ -360,15 +379,14 @@ pub(crate) fn execute_adc<F: Flavor, S: AluOps>(state: &mut S, operand: u8) {
     let dec_result = compose(high, low);
     state.set_accumulator(dec_result);
     state.alu_set_flag(psr::C, carry_out);
+    state.alu_set_flag(psr::V, v_flag(acc, operand, pre_high));
     match F::DECIMAL {
         DecimalSemantics::Nmos6502 => {
             state.alu_set_flag(psr::Z, bin_result == 0);
-            state.alu_set_flag(psr::V, v_flag(acc, operand, pre_high));
             state.alu_set_flag(psr::N, (pre_high & psr::N) != 0);
         }
         DecimalSemantics::Cmos65C02 => {
             state.alu_set_flag(psr::Z, dec_result == 0);
-            state.alu_set_flag(psr::V, binary_overflow);
             state.alu_set_flag(psr::N, (dec_result & psr::N) != 0);
         }
         DecimalSemantics::None => unreachable!(),
@@ -683,6 +701,11 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
     }
 
     #[inline(always)]
+    fn opcode(&self) -> u8 {
+        self.opcode
+    }
+
+    #[inline(always)]
     fn set_pc(&mut self, value: u16) {
         *self.pc = value;
     }
@@ -751,6 +774,11 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
     #[inline(always)]
     fn jmp_indirect_wrap_bug(&self) -> bool {
         F::JMP_INDIRECT_WRAP_BUG
+    }
+
+    #[inline(always)]
+    fn read_invalid_on_page_cross(&self) -> bool {
+        F::INVALID_ADDR_READ
     }
 
     #[inline(always)]

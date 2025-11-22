@@ -46,21 +46,21 @@ const fn make_empty_table() -> [Instruction; 256] {
 
 macro_rules! define_opcodes {
     (@emit_entry $table_var:ident, $table_ident:ident, $mnemonic:ident,
-        $mode:ident $( ( $variant:ident ) )?, $code:expr
+        $mode:ident $( ( $($variant:tt)* ) )?, $code:expr
     ) => {{
         let memory_action = action_for_mnemonic(Mnemonic::$mnemonic);
         $table_var[$code as usize] = Instruction {
             mnemonic: Mnemonic::$mnemonic,
-            address_mode: AddressMode::$mode $( ( $variant ) )?,
+            address_mode: AddressMode::$mode $( ( $($variant)* ) )?,
             memory_action,
         };
     }};
     (@emit_entry $table_var:ident, $table_ident:ident, $mnemonic:ident,
-        $mode:ident $( ( $variant:ident ) )?, $code:expr; [$($filter:ident),+ $(,)?]
+        $mode:ident $( ( $($variant:tt)* ) )?, $code:expr; [$($filter:ident),+ $(,)?]
     ) => {{
         let include = false $(|| matches!(OpcodeTable::$table_ident, OpcodeTable::$filter))+;
         if include {
-            define_opcodes!(@emit_entry $table_var, $table_ident, $mnemonic, $mode $( ( $variant ) )?, $code);
+            define_opcodes!(@emit_entry $table_var, $table_ident, $mnemonic, $mode $( ( $($variant)* ) )?, $code);
         }
     }};
     (@fill_table $table_var:ident, $table_ident:ident;) => {};
@@ -68,7 +68,7 @@ macro_rules! define_opcodes {
         $(#[$doc:meta])*
         $mnemonic:ident {
             $(
-                $mode:ident $( ( $variant:ident ) )?
+                $mode:ident $( ( $($variant:tt)* ) )?
                 $( @ [ $($entry_table:ident),+ ] )?
                 = $code:expr,
             )+
@@ -77,7 +77,7 @@ macro_rules! define_opcodes {
     ) => {
         $(
             define_opcodes!(
-                @emit_entry $table_var, $table_ident, $mnemonic, $mode $( ( $variant ) )?, $code
+                @emit_entry $table_var, $table_ident, $mnemonic, $mode $( ( $($variant)* ) )?, $code
                 $( ; [$($entry_table),+] )?
             );
         )+
@@ -103,7 +103,7 @@ macro_rules! define_opcodes {
             $(#[$doc:meta])*
             $mnemonic:ident {
                 $(
-                    $mode:ident $( ( $variant:ident ) )?
+                    $mode:ident $( ( $($variant:tt)* ) )?
                     $( @ [ $($entry_table:ident),+ $(,)? ] )?
                     = $code:expr,
                 )+
@@ -133,7 +133,7 @@ macro_rules! define_opcodes {
                         $(#[$doc])*
                         $mnemonic {
                             $(
-                                $mode $( ( $variant ) )?
+                                $mode $( ( $($variant)* ) )?
                                 $( @ [ $($entry_table),+ ] )?
                                 = $code,
                             )+
@@ -778,11 +778,11 @@ define_opcodes! {
         NoMemory(Immediate) @[Nmos] = 0xC2,
         NoMemory(Immediate) @[Nmos] = 0xE2,
         DirectPage(None) @[Nmos] = 0x04,
-        DirectPage(None) @[Nmos] = 0x44,
+        DirectPage(None) @[Nmos, Cmos] = 0x44,
         DirectPage(None) @[Nmos] = 0x64,
         DirectPage(X) @[Nmos] = 0x14,
         DirectPage(X) @[Nmos] = 0x34,
-        DirectPage(X) @[Nmos] = 0x54,
+        DirectPage(X) @[Nmos, Cmos] = 0x54,
         DirectPage(X) @[Nmos] = 0x74,
         DirectPage(X) @[Nmos] = 0xD4,
         DirectPage(X) @[Nmos] = 0xF4,
@@ -793,6 +793,52 @@ define_opcodes! {
         Absolute(X) @[Nmos] = 0x7C,
         Absolute(X) @[Nmos] = 0xDC,
         Absolute(X) @[Nmos] = 0xFC,
+
+        // CMOS cores replace illegal opcodes with NOPs of varying byte lengths
+        // and cycle counts
+        CmosNop(1, 1) @[Cmos] = 0x03,
+        CmosNop(1, 1) @[Cmos] = 0x13,
+        CmosNop(1, 1) @[Cmos] = 0x23,
+        CmosNop(1, 1) @[Cmos] = 0x33,
+        CmosNop(1, 1) @[Cmos] = 0x43,
+        CmosNop(1, 1) @[Cmos] = 0x53,
+        CmosNop(1, 1) @[Cmos] = 0x63,
+        CmosNop(1, 1) @[Cmos] = 0x73,
+        CmosNop(1, 1) @[Cmos] = 0x83,
+        CmosNop(1, 1) @[Cmos] = 0x93,
+        CmosNop(1, 1) @[Cmos] = 0xA3,
+        CmosNop(1, 1) @[Cmos] = 0xB3,
+        CmosNop(1, 1) @[Cmos] = 0xC3,
+        CmosNop(1, 1) @[Cmos] = 0xD3,
+        CmosNop(1, 1) @[Cmos] = 0xE3,
+        CmosNop(1, 1) @[Cmos] = 0xF3,
+        CmosNop(1, 1) @[Cmos] = 0x0B,
+        CmosNop(1, 1) @[Cmos] = 0x1B,
+        CmosNop(1, 1) @[Cmos] = 0x2B,
+        CmosNop(1, 1) @[Cmos] = 0x3B,
+        CmosNop(1, 1) @[Cmos] = 0x4B,
+        CmosNop(1, 1) @[Cmos] = 0x5B,
+        CmosNop(1, 1) @[Cmos] = 0x6B,
+        CmosNop(1, 1) @[Cmos] = 0x7B,
+        CmosNop(1, 1) @[Cmos] = 0x8B,
+        CmosNop(1, 1) @[Cmos] = 0x9B,
+        CmosNop(1, 1) @[Cmos] = 0xAB,
+        CmosNop(1, 1) @[Cmos] = 0xBB,
+        CmosNop(1, 1) @[Cmos] = 0xEB,
+        CmosNop(1, 1) @[Cmos] = 0xFB,
+        CmosNop(2, 2) @[Cmos] = 0x02,
+        CmosNop(2, 2) @[Cmos] = 0x22,
+        CmosNop(2, 2) @[Cmos] = 0x42,
+        CmosNop(2, 2) @[Cmos] = 0x62,
+        CmosNop(2, 2) @[Cmos] = 0x82,
+        CmosNop(2, 2) @[Cmos] = 0xC2,
+        CmosNop(2, 2) @[Cmos] = 0xE2,
+        //CmosNop(2, 3) @[Cmos] = 0x44,
+        //CmosNop(2, 4) @[Cmos] = 0x54,
+        CmosNop(2, 4) @[Cmos] = 0xF4, // this one was on the list twice?
+        CmosNop(3, 4) @[Cmos] = 0xDC,
+        CmosNop(3, 4) @[Cmos] = 0xFC,
+        CmosNop(3, 8) @[Cmos] = 0x5C,
     },
 
     // Illegal NMOS Opcodes ///////////////////////////////////////////////////////////////////////
