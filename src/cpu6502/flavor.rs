@@ -7,7 +7,7 @@
 #![allow(dead_code)]
 
 use crate::isa::{
-    Latch, OffsetType,
+    Latch,
     microcycle::{AluOp, BusCycle, DecodeContext, MicroCode, MicroCycle, UcycQueue},
     table::OpcodeTable,
 };
@@ -80,8 +80,6 @@ fn emit_jsr_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
         local_latch: Latch::EaHi,
         alu: AluOp::JumpToEa, // ready for next opcode fetch!
     });
-    // then, PC is already rarin to go
-    queue.push(MicroCycle::opcode_fetch());
 }
 
 /// Slightly different dummy reads
@@ -91,7 +89,6 @@ fn emit_rts_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
     queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
     queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, false));
     queue.push(MicroCycle::read(Latch::Pc, Latch::None, true));
-    queue.push(MicroCycle::opcode_fetch());
 }
 
 pub struct Micro6502;
@@ -103,7 +100,7 @@ impl MicroCode for Micro6502 {
     ///
     /// note: we don't need to deal with OffsetType as it is always None: there is no
     /// such thing as JMP (IND,X) on the NMOS6502. It was introduced on the CMOS variants
-    fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext, _offset: OffsetType) {
+    fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext) {
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
         // read Ptr, but instead of automatically incrementing it (which would result in the
@@ -120,7 +117,6 @@ impl MicroCode for Micro6502 {
             alu: AluOp::IncLatch(Latch::PtrLo), // wraps around on Lo byte, does not affect Hi
         });
         queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -132,7 +128,7 @@ impl MicroCode for Micro6502 {
     }
 
     fn emit_jam(queue: &mut UcycQueue, _ctx: DecodeContext) {
-        queue.push(MicroCycle::read(Latch::Pc, Latch::None, true));
+        queue.push(MicroCycle::read(Latch::Pc, Latch::None, false));
         queue.push(MicroCycle::read(
             Latch::Constant(0xFFFF),
             Latch::None,
@@ -159,7 +155,7 @@ impl MicroCode for Micro6502 {
             local_latch: Latch::None,
             alu: AluOp::Jam,
         });
-        queue.push(MicroCycle::opcode_fetch()); // this will never be executed
+        queue.push(MicroCycle::dummy_read(Latch::None)); // this will never be reached, we just dont want the queue to be empty
     }
 }
 
@@ -169,30 +165,12 @@ impl MicroCode for Micro65C02 {
     ///
     /// The bugfix results in correct page for the pointer high byte, at the cost of
     /// one extra cycle: both JMP (IND) and JMP (IND,X) take six cycles
-    fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext, offset: OffsetType) {
+    fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext) {
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
         queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
-        if offset != OffsetType::None {
-            // dummy read while adding offset:
-            queue.push(MicroCycle {
-                bus: BusCycle {
-                    addr: Latch::Pc,
-                    vda: false,
-                    vpa: true,
-                    read: true,
-                },
-                inc_src: false,
-                local_latch: Latch::None,
-                alu: AluOp::AddOffset {
-                    latch: Latch::Ptr,
-                    offset,
-                },
-            });
-        }
         queue.push(MicroCycle::read_ptr1(Latch::PcLo));
-        queue.push(MicroCycle::read_inv_ptr2());
+        queue.push(MicroCycle::read_inv_ptr2(Latch::PcHi));
         queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -211,7 +189,6 @@ impl MicroCode for Micro65C02 {
             queue.push(MicroCycle::read(Latch::Pc, Latch::None, inc[i]));
             i += 1;
         }
-        queue.push(MicroCycle::opcode_fetch());
     }
 }
 pub static MICRO_6502: Micro6502 = Micro6502;

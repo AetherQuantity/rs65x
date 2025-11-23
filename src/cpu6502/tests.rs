@@ -163,7 +163,7 @@ fn run_instruction<F: Flavor>(
     loop {
         match cpu.step(bus) {
             StepResult::Pending => {}
-            StepResult::InstructionFinished => break,
+            StepResult::DoOpcodeFetch => break,
         }
     }
     let total_cycles = cpu.cycles - start_cycles;

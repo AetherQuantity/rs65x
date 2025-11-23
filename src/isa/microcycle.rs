@@ -13,7 +13,7 @@ pub struct UcycQueue {
 impl Default for UcycQueue {
     fn default() -> Self {
         Self {
-            buf: [MicroCycle::opcode_fetch(); MAX_UCYC],
+            buf: [MicroCycle::read(Latch::Ea, Latch::None, false); MAX_UCYC],
             head: 0,
             len: 0,
         }
@@ -72,6 +72,11 @@ impl UcycQueue {
     pub fn dec_head(&mut self) {
         self.head -= 1;
     }
+
+    #[inline(always)]
+    pub fn len(&self) -> u8 {
+        self.len - self.head
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -94,7 +99,6 @@ pub struct BusCycle {
 #[derive(Clone, Copy, Debug)]
 pub enum AluOp {
     None,
-    NextOpcode,
     AddOffset { latch: Latch, offset: OffsetType },
     OffsetWithExtraCycle(OffsetType),
     DecSp,
@@ -105,6 +109,7 @@ pub enum AluOp {
     SetPc(u16),
     Jam,
     FixPtr,
+    SpecialAddOffset,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -125,20 +130,6 @@ impl MicroCycle {
                 queue.push(MicroCycle::alu_modify(ctx.modify_read)); // performs some kind of dummy read/write
                 queue.push(MicroCycle::alu_write());
             }
-        }
-        queue.push(MicroCycle::opcode_fetch()); // clean up and fetch next opcode
-    }
-    pub const fn opcode_fetch() -> Self {
-        MicroCycle {
-            bus: BusCycle {
-                addr: Latch::Pc,
-                vda: true,
-                vpa: true,
-                read: true,
-            },
-            inc_src: true,
-            local_latch: Latch::None,
-            alu: AluOp::NextOpcode,
         }
     }
     pub const fn read(src: Latch, dest: Latch, inc_src: bool) -> Self {
@@ -272,7 +263,7 @@ impl MicroCycle {
             alu: AluOp::IncLatch(Latch::PtrLo),
         }
     }
-    pub const fn read_inv_ptr2() -> Self {
+    pub const fn read_inv_ptr2(dest: Latch) -> Self {
         MicroCycle {
             bus: BusCycle {
                 addr: Latch::Ptr, // invalid address!
@@ -281,7 +272,7 @@ impl MicroCycle {
                 read: true,
             },
             inc_src: false,
-            local_latch: Latch::None,
+            local_latch: dest,
             alu: AluOp::FixPtr,
         }
     }
@@ -301,12 +292,10 @@ pub struct DecodeContext {
 pub trait MicroCode {
     fn emit_implied(queue: &mut UcycQueue, _ctx: DecodeContext) {
         queue.push(MicroCycle::read(Latch::Pc, Latch::None, false));
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_immediate(queue: &mut UcycQueue, _ctx: DecodeContext) {
         queue.push(MicroCycle::read(Latch::Pc, Latch::Op0, true));
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_dp(queue: &mut UcycQueue, ctx: DecodeContext, offset: OffsetType) {
@@ -368,7 +357,6 @@ pub trait MicroCode {
         } else {
             queue.push(MicroCycle::alu_push()); // one cycle to push and also dec sp
         }
-        queue.push(MicroCycle::opcode_fetch()); // fetch next opcode
     }
 
     fn emit_jmpabs(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -384,12 +372,11 @@ pub trait MicroCode {
             local_latch: Latch::EaHi,
             alu: AluOp::JumpToEa,
         });
-        queue.push(MicroCycle::opcode_fetch());
     }
 
-    fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext, offset: OffsetType) {
-        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
-        // 816 cycle count!
+    fn emit_jmpabsx(queue: &mut UcycQueue, _ctx: DecodeContext) {
+        queue.push(MicroCycle::read(Latch::Pc, Latch::EaLo, true));
+        queue.push(MicroCycle::read(Latch::Pc, Latch::EaHi, false));
         queue.push(MicroCycle {
             bus: BusCycle {
                 addr: Latch::Pc,
@@ -398,15 +385,15 @@ pub trait MicroCode {
                 read: true,
             },
             inc_src: false,
-            local_latch: Latch::PtrHi,
-            alu: AluOp::AddOffset {
-                latch: Latch::Ptr,
-                offset,
-            },
+            local_latch: Latch::None,
+            alu: AluOp::SpecialAddOffset,
         });
-        queue.push(MicroCycle::read(Latch::Ptr, Latch::PcLo, true));
-        queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
-        queue.push(MicroCycle::opcode_fetch());
+        queue.push(MicroCycle::read(Latch::Ea, Latch::PcLo, true));
+        queue.push(MicroCycle::read(Latch::Ea, Latch::PcHi, false));
+    }
+
+    fn emit_jmpind(_queue: &mut UcycQueue, _ctx: DecodeContext) {
+        todo!("all 8-bit cores override this. we will put the 816 code here when we need it");
     }
 
     fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -427,9 +414,6 @@ pub trait MicroCode {
         // first have to push PC Hi and Lo to the stack though
         queue.push(MicroCycle::push(Latch::PcHi));
         queue.push(MicroCycle::push(Latch::PcLo));
-
-        // then, PC is already rarin to go
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_rts(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -448,7 +432,6 @@ pub trait MicroCode {
         queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
         queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, true));
         queue.push(MicroCycle::dummy_read(Latch::Sp));
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_branch_rel(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -501,7 +484,6 @@ pub trait MicroCode {
             Latch::PcHi,
             false,
         ));
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_rti(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -510,7 +492,6 @@ pub trait MicroCode {
         queue.push(MicroCycle::read(Latch::Sp, Latch::Status, true));
         queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
         queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, false));
-        queue.push(MicroCycle::opcode_fetch());
     }
 
     fn emit_jam(_queue: &mut UcycQueue, _ctx: DecodeContext) {

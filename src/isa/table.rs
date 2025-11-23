@@ -652,7 +652,7 @@ define_opcodes! {
     Jmp {
         Jump(JmpAbsolute) = 0x4C,
         Jump(JmpIndirect) = 0x6C,
-        Jump(JmpIndirectX) @[Cmos, Wdc816] = 0x7C,
+        Jump(JmpAbsoluteX) @[Cmos, Wdc816] = 0x7C,
     },
     /// # Jump to Subroutine
     /// Pushes the address of the next instruction onto the stack, then sets the program counter to the
@@ -784,8 +784,8 @@ define_opcodes! {
         DirectPage(X) @[Nmos] = 0x34,
         DirectPage(X) @[Nmos, Cmos] = 0x54,
         DirectPage(X) @[Nmos] = 0x74,
-        DirectPage(X) @[Nmos] = 0xD4,
-        DirectPage(X) @[Nmos] = 0xF4,
+        DirectPage(X) @[Nmos, Cmos] = 0xD4,
+        DirectPage(X) @[Nmos, Cmos] = 0xF4,
         Absolute(None) @[Nmos] = 0x0C,
         Absolute(X) @[Nmos] = 0x1C,
         Absolute(X) @[Nmos] = 0x3C,
@@ -835,7 +835,7 @@ define_opcodes! {
         CmosNop(2, 2) @[Cmos] = 0xE2,
         //CmosNop(2, 3) @[Cmos] = 0x44,
         //CmosNop(2, 4) @[Cmos] = 0x54,
-        CmosNop(2, 4) @[Cmos] = 0xF4, // this one was on the list twice?
+        //CmosNop(2, 4) @[Cmos] = 0xF4, // this one was on the list twice?
         CmosNop(3, 4) @[Cmos] = 0xDC,
         CmosNop(3, 4) @[Cmos] = 0xFC,
         CmosNop(3, 8) @[Cmos] = 0x5C,

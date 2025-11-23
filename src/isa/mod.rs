@@ -42,7 +42,7 @@ pub mod address_mode_subtypes {
         JmpAbsolute,
         JmpIndirect,
         JmpIndirectLong,
-        JmpIndirectX,
+        JmpAbsoluteX,
         ToSubroutine,
         ToInterrupt,
         FromSubroutine,
@@ -206,7 +206,7 @@ impl fmt::Display for AddressMode {
             DpIndirect(OffsetType::Y) => write!(f, "IndirectY"),
             Jump(JumpType::JmpAbsolute) => write!(f, "JmpAbsolute"),
             Jump(JumpType::JmpIndirect) => write!(f, "JmpIndirect"),
-            Jump(JumpType::JmpIndirectX) => write!(f, "JmpIndirectX"),
+            Jump(JumpType::JmpAbsoluteX) => write!(f, "JmpIndirectX"),
             Jump(JumpType::ToSubroutine) => write!(f, "Special (Jsr)"),
             Jump(JumpType::ToInterrupt) => write!(f, "Special (Brk)"),
             Jump(JumpType::FromSubroutine) => write!(f, "Special (Rts)"),
@@ -266,10 +266,8 @@ impl AddressMode {
             AddressMode::DpIndirect(off) => M::emit_dp_ind(queue, ctx, off),
             AddressMode::Stack => M::emit_stack(queue, ctx),
             AddressMode::Jump(JumpType::JmpAbsolute) => M::emit_jmpabs(queue, ctx),
-            AddressMode::Jump(JumpType::JmpIndirect) => {
-                M::emit_jmpind(queue, ctx, OffsetType::None)
-            }
-            AddressMode::Jump(JumpType::JmpIndirectX) => M::emit_jmpind(queue, ctx, OffsetType::X),
+            AddressMode::Jump(JumpType::JmpIndirect) => M::emit_jmpind(queue, ctx),
+            AddressMode::Jump(JumpType::JmpAbsoluteX) => M::emit_jmpabsx(queue, ctx),
             AddressMode::Jump(JumpType::ToSubroutine) => M::emit_jsr(queue, ctx),
             AddressMode::Jump(JumpType::FromSubroutine) => M::emit_rts(queue, ctx),
             AddressMode::Jump(JumpType::ToInterrupt) => M::emit_brk(queue, ctx),

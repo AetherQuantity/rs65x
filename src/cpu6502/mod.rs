@@ -12,7 +12,7 @@ use core::marker::PhantomData;
 
 use crate::bus::Bus;
 use crate::isa::JumpType;
-use crate::isa::microcycle::{DecodeContext, MicroCycle, UcycQueue};
+use crate::isa::microcycle::{DecodeContext, UcycQueue};
 use crate::isa::op::{MicroContext, MicroExecutor, StepResult};
 use crate::isa::table::{Instruction, Mnemonic};
 use crate::isa::{AddressMode, address_mode_subtypes::NoMemType};
@@ -139,9 +139,15 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             Ply => self.y = self.alu_set_zn(read),
             Plp => self.p = (read | psr::U_6502) & !psr::B_6502,
             Bit => {
-                let status = self.p & !(psr::Z | psr::N | psr::V);
-                let z = psr::Z * if self.a & read == 0 { 1 } else { 0 };
-                self.p = status | z | (read & 0xC0);
+                if self.current_inst.unwrap().address_mode
+                    == AddressMode::NoMemory(NoMemType::Immediate)
+                {
+                    self.alu_set_flag(psr::Z, self.a & read == 0)
+                } else {
+                    let status = self.p & !(psr::Z | psr::N | psr::V);
+                    let z = psr::Z * if self.a & read == 0 { 1 } else { 0 };
+                    self.p = status | z | (read & 0xC0);
+                }
             }
             Anc => {
                 self.a = self.alu_set_zn(self.a & read);
@@ -279,16 +285,11 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     pub fn step(&mut self, bus: &mut B) -> StepResult {
-        if self.ucycs.front().is_none() {
+        let Some(instruction) = self.current_inst else {
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
             return StepResult::Pending;
-        }
-
-        let instruction = self
-            .current_inst
-            .expect("micro-op execution without decoded instruction");
-
+        };
         let result = {
             let mut ctx = MicroCtx6502::<F, B> {
                 pc: &mut self.pc,
@@ -305,24 +306,38 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             self.scratch.execute_next(&mut ctx, bus, &mut self.ucycs)
         };
 
-        if matches!(result, StepResult::InstructionFinished) {
+        if matches!(result, StepResult::DoOpcodeFetch) {
+            let adc_sbc_extra_cycle = matches!(instruction.mnemonic, Mnemonic::Adc | Mnemonic::Sbc)
+                && F::DECIMAL == DecimalSemantics::Cmos65C02
+                && self.p & psr::D != 0
+                && !self.extra_adc_sbc_cycle;
             // for read instructions, the byte is stored in Op0
+            if instruction.memory_action == crate::isa::MemoryAction::Read && adc_sbc_extra_cycle {
+                // we need to cram another cycle in here. CMOS adds another cycle on ADC and SBC in order to
+                // give itself enough time to actually do all the flags correctly
+                self.extra_adc_sbc_cycle = true;
+                // still have to do our bus read though
+                let addr = if matches!(instruction.address_mode, AddressMode::NoMemory(_)) {
+                    match instruction.mnemonic {
+                        Mnemonic::Adc => 0x7F,
+                        Mnemonic::Sbc => 0x00,
+                        _ => unreachable!(),
+                    }
+                } else {
+                    self.scratch.ea
+                };
+                let (_data, wait) = bus.read(addr, false, true);
+                self.tick(wait);
+                return StepResult::Pending;
+            }
+            self.extra_adc_sbc_cycle = false;
+
+            // the instruction finishes here, but we need to read the next opcode for next cycle
+            let opcode = self.fetch_opcode(bus);
+            self.prepare_instruction(opcode);
+        }
+        if self.ucycs.is_empty() {
             if instruction.memory_action == crate::isa::MemoryAction::Read {
-                if matches!(instruction.mnemonic, Mnemonic::Adc | Mnemonic::Sbc)
-                    && F::DECIMAL == DecimalSemantics::Cmos65C02
-                    && self.p & psr::D != 0
-                    && !self.extra_adc_sbc_cycle
-                {
-                    // we need to cram another cycle in here. CMOS adds another cycle on ADC and SBC in order to
-                    // give itself enough time to actually do all the flags correctly
-                    self.ucycs.push(MicroCycle::opcode_fetch());
-                    self.extra_adc_sbc_cycle = true;
-                    // still have to do our bus read though
-                    let (_data, wait) = bus.read(self.scratch.ea, false, true);
-                    self.tick(wait);
-                    return StepResult::Pending;
-                }
-                self.extra_adc_sbc_cycle = false;
                 self.finish_read(instruction.mnemonic);
             }
             match instruction.address_mode {
@@ -334,9 +349,6 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 }
                 _ => (),
             }
-            // the instruction finishes here, but we need to read the next opcode for next cycle
-            let opcode = self.fetch_opcode(bus);
-            self.prepare_instruction(opcode);
         }
 
         result
@@ -418,17 +430,13 @@ pub(crate) fn execute_sbc<F: Flavor, S: AluOps>(state: &mut S, operand: u8) {
         state.alu_set_zn(bin_result);
         return;
     }
+    let carry_out = sum > 0xFF;
+    let borrow_in = if state.alu_carry() { 0 } else { 1 };
 
     match F::DECIMAL {
-        // NMOS 6502: perform nibble-wise BCD subtraction (including invalid digits),
-        // but set flags from the *binary* core result (like real hardware).
         DecimalSemantics::Nmos6502 => {
-            let a = acc;
-            let carry_in = state.alu_carry(); // C = 1 means "no borrow"
-
             // Low nibble: (A_lo - M_lo - !C), with wrap and BCD correction.
-            let mut tmp =
-                (a & 0x0F) as i16 - (operand & 0x0F) as i16 - if carry_in { 0 } else { 1 };
+            let mut tmp = (acc & 0x0F) as i16 - (operand & 0x0F) as i16 - borrow_in;
             if tmp < 0 {
                 // Wrap back into the 0–15 range, then subtract 6 for BCD,
                 // and propagate a borrow into the high nibble via -0x10.
@@ -436,51 +444,34 @@ pub(crate) fn execute_sbc<F: Flavor, S: AluOps>(state: &mut S, operand: u8) {
             }
 
             // High nibble: (A_hi - M_hi + low_nibble_result), again with wrap fixup.
-            tmp = (a & 0xF0) as i16 - (operand & 0xF0) as i16 + tmp;
+            tmp = (acc & 0xF0) as i16 - (operand & 0xF0) as i16 + tmp;
             if tmp < 0 {
                 tmp -= 0x60;
             }
 
             let dec_result = (tmp as u8) & 0xFF;
             state.set_accumulator(dec_result);
-
-            // Flags are taken from the binary SBC core (sum/bin_result/binary_overflow).
-            state.alu_set_flag(psr::C, sum > 0xFF);
+            state.alu_set_flag(psr::C, carry_out);
             state.alu_set_flag(psr::V, binary_overflow);
             state.alu_set_zn(bin_result);
         }
-
-        // 65C02: keep the simpler "good BCD" behaviour for now — treat A and operand
-        // as packed BCD 00–99, do base‑10 subtraction, then convert back.
         DecimalSemantics::Cmos65C02 => {
-            let a_tens = (acc >> 4) & 0x0F;
-            let a_ones = acc & 0x0F;
-            let m_tens = (operand >> 4) & 0x0F;
-            let m_ones = operand & 0x0F;
+            // CMOS fixes SBC decimal handling to behave like a true BCD subtraction.
+            // Start from the binary difference and then apply digit-wise corrections.
+            let low_borrow = (acc & 0x0F) < ((operand & 0x0F).wrapping_add(borrow_in as u8));
 
-            let a_dec = (a_tens as i16) * 10 + (a_ones as i16);
-            let m_dec = (m_tens as i16) * 10 + (m_ones as i16);
-            let borrow = if state.alu_carry() { 0i16 } else { 1i16 }; // C=1 means "no borrow"
-
-            let mut diff = a_dec - m_dec - borrow;
-            let carry_out = diff >= 0;
-            if diff < 0 {
-                // Wrap into the 0–99 range, modelling the fact we only keep two BCD digits.
-                diff += 100;
+            let mut dec_result = bin_result;
+            if low_borrow {
+                dec_result = dec_result.wrapping_sub(0x06);
             }
-
-            let dec_u8 = diff as u8; // now in 0–99
-            let tens = dec_u8 / 10;
-            let ones = dec_u8 % 10;
-            let dec_result = (tens << 4) | ones;
+            if !carry_out {
+                dec_result = dec_result.wrapping_sub(0x60);
+            }
 
             state.set_accumulator(dec_result);
             state.alu_set_flag(psr::C, carry_out);
-
-            // 65C02: Z/N come from the *decimal* result, V from the binary overflow.
-            state.alu_set_flag(psr::Z, dec_result == 0);
             state.alu_set_flag(psr::V, binary_overflow);
-            state.alu_set_flag(psr::N, (dec_result & psr::N) != 0);
+            state.alu_set_zn(dec_result);
         }
 
         DecimalSemantics::None => unreachable!(),

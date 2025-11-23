@@ -12,7 +12,7 @@ mod setup;
 #[test]
 fn run_all() {
     for op in 0x00..=0xFF {
-        let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
+        let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
         println!(
             "Starting [{op:02X}] {}, {}",
             inst.mnemonic, inst.address_mode,
@@ -23,7 +23,13 @@ fn run_all() {
 
 #[test]
 fn run_single() {
-    run_opcode(0x03, true).unwrap_or_default();
+    let op = 0xE1;
+    let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
+    println!(
+        "Starting [{op:02X}] {}, {}",
+        inst.mnemonic, inst.address_mode,
+    );
+    run_opcode(op, true).unwrap_or_default();
 }
 
 fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
@@ -43,10 +49,6 @@ fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
             cpu.step(&mut bus);
             assert_cycle(cycle, &bus.last_cycle());
         }
-        // we kinda have to run an extra cycle for opcode prefetch
-        // because that's where the previous cycle gets finalized
-        cpu.step(&mut bus);
-        cpu.pc = cpu.pc.wrapping_sub(1); // but pc is expected to be the next opcode, not after
         assert_final(&cpu, &bus, &test.r#final);
     }
     Ok(())

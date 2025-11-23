@@ -31,9 +31,10 @@ pub struct MicroExecutor {
     pub memory_action: MemoryAction,
 }
 
+#[derive(Debug)]
 pub enum StepResult {
     Pending,
-    InstructionFinished,
+    DoOpcodeFetch,
 }
 
 pub trait MicroContext {
@@ -113,19 +114,16 @@ impl MicroExecutor {
         queue: &mut UcycQueue,
     ) -> StepResult {
         let Some(ucyc) = queue.pop() else {
-            return StepResult::InstructionFinished;
+            return StepResult::DoOpcodeFetch;
         };
         // pre memory access alu stuff:
         let mut fixed_addr = None;
+        let mut subtract_one = false;
         if !ucyc.bus.read {
             // prepare data_bus with the data to write, if any
             ctx.alu_prepare_store(self);
         }
         match ucyc.alu {
-            AluOp::NextOpcode => {
-                // we can ignore everything else i guess, PC guaranteed ok for next opcode fetch
-                return StepResult::InstructionFinished;
-            }
             AluOp::OffsetWithExtraCycle(offset_type) => {
                 // before the memory access, we add offset to the low byte of EA.
                 // technically, this happened last cycle after memory access
@@ -137,27 +135,50 @@ impl MicroExecutor {
                     crate::isa::OffsetType::X => ctx.reg_x(),
                     crate::isa::OffsetType::Y => ctx.reg_y(),
                 };
+
                 let target_ea = self.ea.wrapping_add(offset as u32);
+
+                // "hardware" way: only change low byte, keep high as-is
                 self.ea = (self.ea & !0xFF) | (ea_lo.wrapping_add(offset as u8) as u32);
-                if self.ea != target_ea {
-                    //println!("ea {} != target ea {target_ea}", self.ea);
+                let page_crossed = self.ea != target_ea;
+
+                // 65C02 quirk: INC/DEC abs,X always do the extra dummy cycle at PC+2
+                let opcode = ctx.opcode();
+                let is_incdec_abs_x = matches!(opcode, 0xDE | 0xFE);
+
+                let need_dummy_this_cycle = page_crossed
+                    || self.memory_action == MemoryAction::Write
+                    || (self.memory_action == MemoryAction::ReadModifyWrite && is_incdec_abs_x);
+
+                if need_dummy_this_cycle {
+                    //println!("ea {:#06X} != target ea {target_ea:#06X}", self.ea);
                     if !ctx.read_invalid_on_page_cross() {
                         // on CMOS chips we don't do a read of the invalid location!
-                        // instead, we read the current pc again
+                        // instead, we read the current pc again (PC+2)
                         self.ea = (ctx.pc() as u32).wrapping_sub(1);
                     }
-                    fixed_addr = Some(target_ea)
+                    fixed_addr = Some(target_ea);
                 }
+            }
+            AluOp::SpecialAddOffset => {
+                // oh my goodness.
+                // so, JMP ABS,X (CMOS only), apparently needs to make PC go BACKWARDS for a cycle
+                // for some dummy read it needs to do. wowzer.
+                subtract_one = true;
             }
             _ => {}
         }
 
         // perform the memory access portion of this cycle:
         let addr = self.address_of(ucyc.bus.addr, ctx);
+        let addr = if subtract_one {
+            addr.wrapping_sub(1)
+        } else {
+            addr
+        };
         if ucyc.bus.read {
             let (data, wait) = bus.read(addr, ucyc.bus.vda, ucyc.bus.vpa);
             self.data_latch = data;
-            //println!("read {data:#X} from {addr:#X}");
             self.write_latch(ctx, ucyc.local_latch, data);
             ctx.tick(wait);
         } else {
@@ -174,7 +195,6 @@ impl MicroExecutor {
         // post memory alu stuff:
         match ucyc.alu {
             AluOp::None => {}
-            AluOp::NextOpcode => unreachable!(),
             AluOp::AddOffset { latch, offset } => {
                 let o = match offset {
                     super::OffsetType::None => 0,
@@ -183,21 +203,26 @@ impl MicroExecutor {
                 };
                 self.add_offset(ctx, latch, o);
             }
+            AluOp::SpecialAddOffset => self.add_offset(ctx, Latch::Ea, ctx.reg_x()),
             AluOp::OffsetWithExtraCycle(_) => {
+                let opcode = ctx.opcode();
+                let is_incdec_abs_x = matches!(opcode, 0xDE | 0xFE);
+
                 if let Some(addr) = fixed_addr {
-                    // we need to fix the address! the queue already has a read and an opcode fetch
-                    // so we're done!
+                    // we had a dummy this cycle (page cross / write / special INC/DEC case)
+                    // now restore the "real" EA for the following cycles
                     self.ea = addr;
                 } else if self.memory_action == MemoryAction::Read {
                     // we can short circuit here! next cycle is opcode fetch, which ends the op
                     // and clears everything after it
-                    queue.insert(MicroCycle::opcode_fetch());
-                    // on writes and RMW's, we do the extra cycle even when addr is correct
+                    queue.clear();
                 } else if self.memory_action == MemoryAction::ReadModifyWrite
                     && !ctx.read_invalid_on_page_cross()
+                    && !is_incdec_abs_x
                 {
-                    // on CMOS, we can skip the Read phase of our read-modify-write, because we just read and there
-                    // was no page cross shenanigans
+                    // on CMOS, for *normal* RMW (ASL/LSR/ROL/ROR abs,X) with no page-cross:
+                    // we just read the correct EA, so we can skip the extra read phase.
+                    //println!("popping first of queue (len {} pre-pop", queue.len());
                     queue.pop();
                 }
             }
@@ -235,11 +260,10 @@ impl MicroExecutor {
                         queue.push(MicroCycle::read_pc_set_pc(new_pc));
                     }
                     // then, stick a fork in us, we're done
-                    queue.push(MicroCycle::opcode_fetch());
                 } else {
                     //println!("branch not taken!");
                     // branch not taken! next cycle is opcode fetch
-                    queue.push(MicroCycle::opcode_fetch())
+                    queue.clear();
                 }
             }
             AluOp::SetPc(new_pc) => ctx.set_pc(new_pc),
@@ -253,6 +277,9 @@ impl MicroExecutor {
                     // we overflowed when we inc'd!! we need to add 0x100 to ptr to get to
                     // the right addr
                     self.ptr += 0x100;
+                } else if ctx.opcode() == 0x7C {
+                    // only on JMP ABS,X: this cycle only executes if needed
+                    queue.clear();
                 }
             }
         }

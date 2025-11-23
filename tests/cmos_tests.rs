@@ -11,7 +11,7 @@ mod setup;
 
 #[test]
 fn run_all() {
-    for op in 0x70..=0xFF {
+    for op in 0x00..=0xFF {
         let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
         println!(
             "Starting [{op:02X}] {}, {}",
@@ -23,7 +23,7 @@ fn run_all() {
 
 #[test]
 fn run_single() {
-    let op = 0x71;
+    let op = 0xF4;
     let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
     println!(
         "Starting [{op:02X}] {}, {}",
@@ -47,13 +47,11 @@ fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
         bus.debug_print = debug;
         for cycle in &test.cycles {
             cpu.step(&mut bus);
-            //println!("bus cycle {}", bus.cycle);
             assert_cycle(cycle, &bus.last_cycle());
         }
-        // we kinda have to run an extra cycle for opcode prefetch
-        // because that's where the previous cycle gets finalized
-        cpu.step(&mut bus);
-        cpu.pc = cpu.pc.wrapping_sub(1); // but pc is expected to be the next opcode, not after
+        if debug {
+            println!("All bus activity correct! Checking for final state");
+        }
         assert_final(&cpu, &bus, &test.r#final);
     }
     Ok(())
