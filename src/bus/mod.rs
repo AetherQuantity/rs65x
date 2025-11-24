@@ -1,4 +1,5 @@
 pub mod fastmap;
+pub mod simple;
 
 /// Level-sensitive input lines the CPU samples once per cycle.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -64,6 +65,9 @@ pub trait Bus {
 pub struct OpenBus {
     last: u8,
 }
+
+pub use fastmap::{FastMapBus, IoHandler};
+pub use simple::SimpleBus;
 impl OpenBus {
     #[inline(always)]
     pub fn sample(&self) -> u8 {

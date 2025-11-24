@@ -1,6 +1,40 @@
+//! Ergonomic public surface for the 6502-family cores.
+//!
+//! The crate re-exports ready-to-use CPU variants and a simple in-memory bus so
+//! you don't have to wire up flavors manually:
+//!
+//! ```
+//! use rs65x::{Nmos6502, SimpleBus};
+//!
+//! // Zeroed RAM with a tiny program loaded at $8000.
+//! let mut bus = SimpleBus::with_program(0x8000, &[0xEA, 0xEA]); // NOP; NOP
+//! bus.set_reset_vector(0x8000);
+//!
+//! // Pick a CPU variant without touching internal flavor types.
+//! let mut cpu: Nmos6502<SimpleBus> = Nmos6502::new();
+//! cpu.reset(&mut bus);
+//! ```
+
 pub mod bus;
 pub mod cpu6502;
 pub mod isa;
+
+pub use bus::{Bus, FastMapBus, IoHandler, Lines, SimpleBus, WaitStates};
+
+/// NMOS 6502 core (original MOS/Rockwell parts).
+pub type Nmos6502<B> = cpu6502::Cpu6502<cpu6502::flavor::NMOS6502, B>;
+/// NES Ricoh 2A03/2A07 variant (decimal mode disabled).
+pub type Nes6502<B> = cpu6502::Cpu6502<cpu6502::flavor::NES, B>;
+/// CMOS 65C02 core with Rockwell extensions enabled.
+pub type Cmos65c02<B> = cpu6502::Cpu6502<cpu6502::flavor::CMOS65C02, B>;
+
+/// Grab the most common types without digging through modules.
+pub mod prelude {
+    pub use crate::{
+        Cmos65c02, Nes6502, Nmos6502, SimpleBus,
+        bus::{Bus, Lines},
+    };
+}
 
 #[allow(dead_code)]
 // Processor Status flag bits

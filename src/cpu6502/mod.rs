@@ -6,7 +6,6 @@
 //! can smoke-test the Bus and reset vector logic.
 
 pub mod flavor;
-pub mod tests;
 
 use core::marker::PhantomData;
 
@@ -357,6 +356,12 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     #[inline(always)]
     fn tick(&mut self, wait: u8) {
         self.cycles += 1 + wait as u64;
+    }
+}
+
+impl<F: Flavor, B: Bus> Default for Cpu6502<F, B> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

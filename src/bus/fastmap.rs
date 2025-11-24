@@ -170,6 +170,12 @@ impl FastMapBus {
     }
 }
 
+impl Default for FastMapBus {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Bus for FastMapBus {
     #[inline(always)]
     fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> (u8, WaitStates) {
