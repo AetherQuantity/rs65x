@@ -30,12 +30,6 @@ impl Lines {
     }
 }
 
-/// Extra wait states returned by the bus for a given access.
-///
-/// A value of 0 means the access completes within the current cycle budget.
-/// Non-zero values stretch the cycle by that many additional master cycles.
-pub type WaitStates = u8;
-
 /// Shared bus trait for all cores.
 ///
 /// The core performs **one call per bus cycle** in the default configuration.
@@ -48,12 +42,12 @@ pub trait Bus {
     /// Read a byte from the 24-bit address space.
     ///
     /// Returns `(data, extra_wait_states)`.
-    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> (u8, WaitStates);
+    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> u8;
 
     /// Write a byte to the 24-bit address space.
     ///
     /// Returns `extra_wait_states`.
-    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool) -> WaitStates;
+    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool);
 
     /// Sample asynchronous level-sensitive lines once per cycle.
     fn sample_lines(&mut self) -> Lines;

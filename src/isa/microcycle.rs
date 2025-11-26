@@ -1,4 +1,4 @@
-use crate::isa::{Latch, MemoryAction, OffsetType};
+use crate::isa::{InterruptType, Latch, MemoryAction, OffsetType};
 
 const MAX_UCYC: usize = 14;
 
@@ -469,18 +469,31 @@ pub trait MicroCode {
         // as above, AluOp::Branch fills out the queue from here
     }
 
-    fn emit_brk(queue: &mut UcycQueue, _ctx: DecodeContext) {
-        queue.push(MicroCycle::read(Latch::Pc, Latch::None, true));
+    fn emit_int(queue: &mut UcycQueue, _ctx: DecodeContext, interrupt_type: InterruptType) {
+        let inc = interrupt_type == InterruptType::Brk;
+        queue.push(MicroCycle::read(Latch::Pc, Latch::None, inc));
         queue.push(MicroCycle::push(Latch::PcHi));
         queue.push(MicroCycle::push(Latch::PcLo));
-        queue.push(MicroCycle::push(Latch::BrkStatus));
+        let addr = match interrupt_type {
+            InterruptType::Brk => {
+                queue.push(MicroCycle::push(Latch::BrkStatus));
+                0xFFFE
+            }
+            InterruptType::Irq => {
+                queue.push(MicroCycle::push(Latch::Status));
+                0xFFFE
+            }
+            InterruptType::Nmi => {
+                queue.push(MicroCycle::push(Latch::Status));
+                0xFFFA
+            }
+            InterruptType::Reset => {
+                todo!()
+            }
+        };
+        queue.push(MicroCycle::read(Latch::Constant(addr), Latch::PcLo, false));
         queue.push(MicroCycle::read(
-            Latch::Constant(0xFFFE),
-            Latch::PcLo,
-            false,
-        ));
-        queue.push(MicroCycle::read(
-            Latch::Constant(0xFFFF),
+            Latch::Constant(addr + 1),
             Latch::PcHi,
             false,
         ));

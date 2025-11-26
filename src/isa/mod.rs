@@ -44,7 +44,6 @@ pub mod address_mode_subtypes {
         JmpIndirectLong,
         JmpAbsoluteX,
         ToSubroutine,
-        ToInterrupt,
         FromSubroutine,
         FromInterrupt,
     }
@@ -56,7 +55,16 @@ pub mod address_mode_subtypes {
         DpRelative,
         RelativeLong,
     }
+
+    #[derive(PartialEq, Eq, Debug, Clone, Copy)]
+    pub enum InterruptType {
+        Nmi,
+        Irq,
+        Reset,
+        Brk,
+    }
 }
+
 use core::fmt;
 
 pub use address_mode_subtypes::*;
@@ -186,7 +194,12 @@ pub enum AddressMode {
     /// 65C816 only.
     StackRelative(OffsetType),
 
+    /// # Special CMOS NOP
+    /// The CMOS variants replaced all of the 'illegal' opcodes on the NMOS with NOPS. They are not all created
+    /// equal, however--each one has a number of bytes consumed, and a number of cycles.
     CmosNop(u8, u8),
+
+    Interrupt(InterruptType),
 }
 
 impl fmt::Display for AddressMode {
@@ -208,7 +221,6 @@ impl fmt::Display for AddressMode {
             Jump(JumpType::JmpIndirect) => write!(f, "JmpIndirect"),
             Jump(JumpType::JmpAbsoluteX) => write!(f, "JmpIndirectX"),
             Jump(JumpType::ToSubroutine) => write!(f, "Special (Jsr)"),
-            Jump(JumpType::ToInterrupt) => write!(f, "Special (Brk)"),
             Jump(JumpType::FromSubroutine) => write!(f, "Special (Rts)"),
             Jump(JumpType::FromInterrupt) => write!(f, "Special (Rti)"),
             Branch(BranchType::Relative) => write!(f, "Branch Rel"),
@@ -216,6 +228,7 @@ impl fmt::Display for AddressMode {
             Stack => write!(f, "Stack"),
             Jam => write!(f, "Jam"),
             CmosNop(bytes, cycles) => write!(f, "CMOS Nop, {bytes} bytes, {cycles} cycles"),
+            Interrupt(int_type) => write!(f, "Interrupt: {int_type:?}"),
 
             // 16-bit
             Jump(JumpType::JmpIndirectLong) => write!(f, "JmpIndirectLong"),
@@ -270,7 +283,7 @@ impl AddressMode {
             AddressMode::Jump(JumpType::JmpAbsoluteX) => M::emit_jmpabsx(queue, ctx),
             AddressMode::Jump(JumpType::ToSubroutine) => M::emit_jsr(queue, ctx),
             AddressMode::Jump(JumpType::FromSubroutine) => M::emit_rts(queue, ctx),
-            AddressMode::Jump(JumpType::ToInterrupt) => M::emit_brk(queue, ctx),
+            AddressMode::Interrupt(int_type) => M::emit_int(queue, ctx, int_type),
             AddressMode::Jump(JumpType::FromInterrupt) => M::emit_rti(queue, ctx),
             AddressMode::Branch(BranchType::DpRelative) => M::emit_branch_dprel(queue, ctx),
             AddressMode::Branch(BranchType::Relative) => M::emit_branch_rel(queue, ctx),

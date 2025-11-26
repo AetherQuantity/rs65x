@@ -10,8 +10,8 @@ pub mod flavor;
 use core::marker::PhantomData;
 
 use crate::bus::Bus;
-use crate::isa::JumpType;
-use crate::isa::microcycle::{DecodeContext, UcycQueue};
+use crate::isa::InterruptType;
+use crate::isa::microcycle::{DecodeContext, MicroCode, UcycQueue};
 use crate::isa::op::{MicroContext, MicroExecutor, StepResult};
 use crate::isa::table::{Instruction, Mnemonic};
 use crate::isa::{AddressMode, address_mode_subtypes::NoMemType};
@@ -29,12 +29,13 @@ pub struct Cpu6502<F: Flavor, B: Bus> {
     pub s: u8,   // stack pointer
     pub p: u8,   // processor status
     pub pc: u16, // program counter
-    pub cycles: u64,
     ucycs: UcycQueue,
     scratch: MicroExecutor,
     current_inst: Option<Instruction>,
-    current_opcode: u8,
+    pub current_opcode: u8,
     extra_adc_sbc_cycle: bool,
+    prev_nmi: bool,
+    pending_nmi: bool,
     _f: PhantomData<(F, B)>,
 }
 
@@ -45,16 +46,18 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             a: 0,
             x: 0,
             y: 0,
-            s: 0xFD,                 // reset default
+            s: 0xFF,                 // reset default
             p: psr::I | psr::U_6502, // I set, U set in pushes on many parts
             pc: 0,
-            cycles: 0,
             ucycs: UcycQueue::default(),
             scratch: MicroExecutor::new(),
             current_inst: None,
             current_opcode: 0,
             extra_adc_sbc_cycle: false,
+
             _f: PhantomData,
+            prev_nmi: false,
+            pending_nmi: false,
         }
     }
 
@@ -63,13 +66,12 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     /// stuff later
     #[inline(always)]
     fn read16(bus: &mut B, addr: u16) -> u16 {
-        let (lo, w0) = bus.read(addr as u32, /*vda=*/ true, /*vpa=*/ false);
-        let (hi, w1) = bus.read(
+        let lo = bus.read(addr as u32, /*vda=*/ true, /*vpa=*/ false);
+        let hi = bus.read(
             addr.wrapping_add(1) as u32,
             /*vda=*/ true,
             /*vpa=*/ false,
         );
-        let _ = (w0, w1); // wait-states are accumulated by the caller as needed later
         u16::from_le_bytes([lo, hi])
     }
 
@@ -79,7 +81,6 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     pub fn reset(&mut self, bus: &mut B) {
         self.p |= psr::I; // mask IRQ
         self.pc = Self::read16(bus, 0xFFFC); // TODO: implement the real cycle-accurate reset sequence
-        self.cycles = 0;
         self.ucycs.clear();
         self.scratch.reset();
         self.current_inst = None;
@@ -87,14 +88,19 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     fn fetch_opcode(&mut self, bus: &mut B) -> u8 {
-        let (opcode, wait) = bus.read(self.pc as u32, false, true);
-        self.tick(wait);
+        let opcode = bus.read(self.pc as u32, false, true);
         self.pc = self.pc.wrapping_add(1);
         opcode
     }
 
     fn prepare_instruction(&mut self, opcode: u8) {
         let instruction = Instruction::from_byte(opcode, F::OPCODE_TABLE);
+        if instruction.mnemonic == Mnemonic::Jam {
+            println!(
+                "WARNING, JAM reached, opcode {opcode:02X} at {:04X}",
+                self.pc
+            );
+        }
         self.current_opcode = opcode;
         self.current_inst = Some(instruction);
         self.scratch.reset();
@@ -284,6 +290,11 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     pub fn step(&mut self, bus: &mut B) -> StepResult {
+        let lines = bus.sample_lines();
+        if lines.nmi && !self.prev_nmi {
+            self.pending_nmi = true;
+        }
+        self.prev_nmi = lines.nmi;
         let Some(instruction) = self.current_inst else {
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
@@ -297,7 +308,6 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 a: &mut self.a,
                 x: &mut self.x,
                 y: &mut self.y,
-                cycles: &mut self.cycles,
                 instruction,
                 opcode: self.current_opcode,
                 _marker: PhantomData,
@@ -325,13 +335,24 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 } else {
                     self.scratch.ea
                 };
-                let (_data, wait) = bus.read(addr, false, true);
-                self.tick(wait);
+                let _ = bus.read(addr, false, true);
                 return StepResult::Pending;
             }
             self.extra_adc_sbc_cycle = false;
 
-            // the instruction finishes here, but we need to read the next opcode for next cycle
+            // the instruction finishes here, but we need to read the next opcode for next cycle. first
+            // though, this is the point at which we have to service interrupts
+            if self.pending_nmi {
+                // schedule NMI micro-ops instead of fetching an opcode
+                self.pending_nmi = false;
+                self.start_interrupt(bus, InterruptType::Nmi);
+                return StepResult::Pending;
+            } else if lines.irq && (self.p & psr::I) == 0 {
+                // schedule IRQ micro-ops instead of fetching an opcode
+                self.start_interrupt(bus, InterruptType::Irq);
+                return StepResult::Pending;
+            }
+
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
         }
@@ -343,7 +364,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 AddressMode::NoMemory(NoMemType::Implied) => {
                     self.finish_implied(instruction.mnemonic)
                 }
-                AddressMode::Jump(JumpType::ToInterrupt) => {
+                AddressMode::Interrupt(InterruptType::Brk) => {
                     self.p |= psr::I;
                 }
                 _ => (),
@@ -353,9 +374,33 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         result
     }
 
-    #[inline(always)]
-    fn tick(&mut self, wait: u8) {
-        self.cycles += 1 + wait as u64;
+    fn start_interrupt(&mut self, bus: &mut B, int_type: InterruptType) {
+        //println!("STARTING INTERRUPT!");
+        let instruction = Instruction::from_byte(0, F::OPCODE_TABLE);
+        self.current_opcode = 0; // BRK used for all interrupts, interestingly
+        self.current_inst = Some(instruction);
+        self.scratch.reset();
+        self.scratch.memory_action = instruction.memory_action;
+        let ctx = DecodeContext {
+            e_flag: true,
+            m_flag: true,
+            x_flag: true,
+            action: instruction.memory_action,
+            modify_read: !F::RMW_DUMMY_WRITE,
+        };
+        F::Micro::emit_int(&mut self.ucycs, ctx, int_type);
+        let mut ctx = MicroCtx6502::<F, B> {
+            pc: &mut self.pc,
+            sp: &mut self.s,
+            status: &mut self.p,
+            a: &mut self.a,
+            x: &mut self.x,
+            y: &mut self.y,
+            instruction,
+            opcode: self.current_opcode,
+            _marker: PhantomData,
+        };
+        self.scratch.execute_next(&mut ctx, bus, &mut self.ucycs);
     }
 }
 
@@ -622,7 +667,6 @@ struct MicroCtx6502<'a, F: Flavor, B: Bus> {
     a: &'a mut u8,
     x: &'a mut u8,
     y: &'a mut u8,
-    cycles: &'a mut u64,
     instruction: Instruction,
     opcode: u8,
     _marker: PhantomData<(F, B)>,
@@ -755,11 +799,6 @@ impl<'a, F: Flavor, B: Bus> MicroContext for MicroCtx6502<'a, F, B> {
     #[inline(always)]
     fn reg_a(&self) -> u16 {
         (*self.a) as u16
-    }
-
-    #[inline(always)]
-    fn tick(&mut self, wait_states: u8) {
-        *self.cycles += 1 + wait_states as u64;
     }
 
     #[inline(always)]

@@ -4,7 +4,7 @@
 //! 64 KiB RAM array, mirrors writes back for reads, and exposes helpers to load
 //! programs and set the interrupt vectors.
 
-use super::{Bus, Lines, WaitStates};
+use super::{Bus, Lines};
 
 /// Simple zero-wait-state 64 KiB bus backed by RAM.
 pub struct SimpleBus {
@@ -79,16 +79,15 @@ impl Default for SimpleBus {
 
 impl Bus for SimpleBus {
     #[inline(always)]
-    fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> (u8, WaitStates) {
+    fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> u8 {
         let addr16 = addr as u16 as usize;
-        (self.ram[addr16], 0)
+        self.ram[addr16]
     }
 
     #[inline(always)]
-    fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) -> WaitStates {
+    fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) {
         let addr16 = addr as u16 as usize;
         self.ram[addr16] = data;
-        0
     }
 
     #[inline(always)]

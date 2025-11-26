@@ -89,7 +89,7 @@ macro_rules! define_opcodes {
         #[allow(non_upper_case_globals)]
         pub static $table: [Instruction; 256] = {
             #[allow(unused_imports)]
-            use address_mode_subtypes::{NoMemType::*, OffsetType::*, JumpType::*, BranchType::*};
+            use address_mode_subtypes::{NoMemType::*, OffsetType::*, JumpType::*, BranchType::*, InterruptType::*};
             let mut table_data: [Instruction; 256] = make_empty_table();
             define_opcodes!(@fill_table table_data, $table; $($definitions)*);
             table_data
@@ -750,7 +750,7 @@ define_opcodes! {
     /// B flag is set to 1 before pushing the status register onto the stack.
     ///
     /// Memory access type: None
-    Brk { Jump(ToInterrupt) = 0x00, },
+    Brk { Interrupt(Brk) = 0x00, },
 
     /// # Return from Interrupt
     /// Pulls the status register and program counter from the stack.

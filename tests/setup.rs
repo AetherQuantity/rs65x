@@ -1,4 +1,4 @@
-use rs65x::bus::{Bus, Lines, WaitStates};
+use rs65x::bus::{Bus, Lines};
 use serde::Deserialize;
 
 fn de_read_write<'de, D>(deserializer: D) -> Result<AccessType, D::Error>
@@ -60,7 +60,7 @@ impl Harness {
 }
 
 impl Bus for Harness {
-    fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> (u8, WaitStates) {
+    fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> u8 {
         let access_type = AccessType::Read;
         let addr16 = addr as u16;
         let data = self.mem[addr16 as usize];
@@ -73,10 +73,10 @@ impl Bus for Harness {
             access_type,
         };
         self.cycle += 1;
-        (data, 0)
+        data
     }
 
-    fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) -> WaitStates {
+    fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) {
         if self.debug_print {
             println!("write access at {addr:#06X} | data = {data:#04X}");
         }
@@ -89,7 +89,6 @@ impl Bus for Harness {
             access_type,
         };
         self.cycle += 1;
-        0
     }
 
     fn sample_lines(&mut self) -> Lines {

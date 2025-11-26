@@ -23,7 +23,7 @@ fn run_all() {
 
 #[test]
 fn run_single() {
-    let op = 0x02;
+    let op = 0x00;
     let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
     println!(
         "Starting [{op:02X}] {}, {}",

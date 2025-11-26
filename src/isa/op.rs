@@ -5,7 +5,7 @@
 //! Each core (8‑bit or 16‑bit) can wrap these with its own exec function pointers later.
 
 use crate::{
-    bus::{Bus, WaitStates},
+    bus::Bus,
     isa::{
         Latch, MemoryAction,
         microcycle::{AluOp, MicroCycle, UcycQueue},
@@ -65,9 +65,6 @@ pub trait MicroContext {
     fn stack_base(&self) -> u16 {
         0x0100
     }
-
-    /// Advance cycle accounting for the current micro-op (1) plus any bus-inserted wait states.
-    fn tick(&mut self, wait_states: WaitStates);
 
     /// Whether this context should perform the legacy NMOS dummy write during RMW sequences.
     fn rmw_dummy_write(&self) -> bool;
@@ -177,16 +174,14 @@ impl MicroExecutor {
             addr
         };
         if ucyc.bus.read {
-            let (data, wait) = bus.read(addr, ucyc.bus.vda, ucyc.bus.vpa);
+            let data = bus.read(addr, ucyc.bus.vda, ucyc.bus.vpa);
             self.data_latch = data;
             self.write_latch(ctx, ucyc.local_latch, data);
-            ctx.tick(wait);
         } else {
             if !matches!(ucyc.local_latch, Latch::None) {
                 self.data_latch = self.read_latch(ctx, ucyc.local_latch);
             }
-            let wait = bus.write(addr, self.data_latch, ucyc.bus.vda, ucyc.bus.vpa);
-            ctx.tick(wait);
+            bus.write(addr, self.data_latch, ucyc.bus.vda, ucyc.bus.vpa);
         }
         if ucyc.inc_src {
             self.add_offset(ctx, ucyc.bus.addr, 1);

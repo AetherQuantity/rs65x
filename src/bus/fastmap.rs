@@ -3,7 +3,7 @@
 //! Goal: O(1) RAM/ROM access using a 4 KiB page table over the full 16 MiB space.
 //! IO pages go through a small dynamic jump table; only those accesses pay a vtable cost.
 
-use super::{Bus, Lines, OpenBus, WaitStates};
+use super::{Bus, Lines, OpenBus};
 
 const PAGE_SHIFT: u32 = 12; // 4 KiB
 const PAGE_SIZE: usize = 1 << PAGE_SHIFT; // 4096
@@ -43,8 +43,8 @@ impl Default for Page {
 
 /// Minimal IO handler interface. Implementors may add wait states.
 pub trait IoHandler {
-    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> (u8, WaitStates);
-    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool) -> WaitStates;
+    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> u8;
+    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool);
 }
 
 pub struct FastMapBus {
@@ -178,7 +178,7 @@ impl Default for FastMapBus {
 
 impl Bus for FastMapBus {
     #[inline(always)]
-    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> (u8, WaitStates) {
+    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> u8 {
         debug_assert!(addr >> 24 == 0, "address out of 24-bit range");
         let p = unsafe { *self.pages.get_unchecked(Self::page_index(addr)) }; // copy Page to avoid holding an & borrow
         let off = (addr & PAGE_MASK) as usize;
@@ -186,19 +186,19 @@ impl Bus for FastMapBus {
             PageKind::Ram => unsafe {
                 let v = core::ptr::read(p.ptr.add(off));
                 self.open.drive(v);
-                (v, 0)
+                v
             },
             PageKind::Rom => unsafe {
                 let v = core::ptr::read(p.ptr.add(off));
                 self.open.drive(v);
-                (v, 0)
+                v
             },
             _ => self.read_slow(p, addr, vda, vpa),
         }
     }
 
     #[inline(always)]
-    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool) -> WaitStates {
+    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool) {
         debug_assert!(addr >> 24 == 0, "address out of 24-bit range");
         let idx = Self::page_index(addr);
         let p = unsafe { *self.pages.get_unchecked(idx) }; // copy once
@@ -207,12 +207,10 @@ impl Bus for FastMapBus {
             PageKind::Ram => unsafe {
                 core::ptr::write(p.ptr.add(off), data);
                 self.open.drive(data);
-                0
             },
             PageKind::Rom => {
                 // Writes to ROM ignored but still drive open-bus
                 self.open.drive(data);
-                0
             }
             _ => self.write_slow(p, addr, data, vda, vpa),
         }
@@ -227,32 +225,30 @@ impl Bus for FastMapBus {
 impl FastMapBus {
     #[inline(never)]
     #[cold]
-    fn read_slow(&mut self, p: Page, addr: u32, vda: bool, vpa: bool) -> (u8, WaitStates) {
+    fn read_slow(&mut self, p: Page, addr: u32, vda: bool, vpa: bool) -> u8 {
         match p.kind {
             PageKind::Io => {
                 let handler = &mut self.io[p.aux as usize];
-                let (v, w) = handler.read(addr, vda, vpa);
+                let v = handler.read(addr, vda, vpa);
                 self.open.drive(v);
-                (v, w)
+                v
             }
-            PageKind::Open => (self.open.sample(), 0),
+            PageKind::Open => self.open.sample(),
             _ => unreachable!(),
         }
     }
 
     #[inline(never)]
     #[cold]
-    fn write_slow(&mut self, p: Page, addr: u32, data: u8, vda: bool, vpa: bool) -> WaitStates {
+    fn write_slow(&mut self, p: Page, addr: u32, data: u8, vda: bool, vpa: bool) {
         match p.kind {
             PageKind::Io => {
                 let handler = &mut self.io[p.aux as usize];
-                let w = handler.write(addr, data, vda, vpa);
+                handler.write(addr, data, vda, vpa);
                 self.open.drive(data);
-                w
             }
             PageKind::Open => {
                 self.open.drive(data);
-                0
             }
             _ => unreachable!(),
         }
