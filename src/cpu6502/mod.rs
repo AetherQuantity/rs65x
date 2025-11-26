@@ -291,6 +291,11 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
 
     pub fn step(&mut self, bus: &mut B) {
         let lines = bus.sample_lines();
+        // NMI detection still happens even if RDY is low!
+        if lines.nmi && !self.prev_nmi {
+            self.pending_nmi = true;
+        }
+        self.prev_nmi = lines.nmi;
         if !lines.rdy {
             // we need to NOP if this cycle is going to be a read
             let Some(this_cycle) = self.ucycs.front() else {
@@ -305,10 +310,6 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             }
             // otherwise, this is a write cycle and it should proceed even if RDY is low
         }
-        if lines.nmi && !self.prev_nmi {
-            self.pending_nmi = true;
-        }
-        self.prev_nmi = lines.nmi;
         let Some(instruction) = self.current_inst else {
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
