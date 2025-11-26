@@ -289,8 +289,22 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         }
     }
 
-    pub fn step(&mut self, bus: &mut B) -> StepResult {
+    pub fn step(&mut self, bus: &mut B) {
         let lines = bus.sample_lines();
+        if !lines.rdy {
+            // we need to NOP if this cycle is going to be a read
+            let Some(this_cycle) = self.ucycs.front() else {
+                return;
+            };
+            if self.current_inst.is_none() {
+                // opcode fetch is a read
+                return;
+            }
+            if this_cycle.bus.read {
+                return;
+            }
+            // otherwise, this is a write cycle and it should proceed even if RDY is low
+        }
         if lines.nmi && !self.prev_nmi {
             self.pending_nmi = true;
         }
@@ -298,7 +312,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         let Some(instruction) = self.current_inst else {
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
-            return StepResult::Pending;
+            return;
         };
         let result = {
             let mut ctx = MicroCtx6502::<F, B> {
@@ -336,7 +350,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                     self.scratch.ea
                 };
                 let _ = bus.read(addr, false, true);
-                return StepResult::Pending;
+                return;
             }
             self.extra_adc_sbc_cycle = false;
 
@@ -346,11 +360,11 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 // schedule NMI micro-ops instead of fetching an opcode
                 self.pending_nmi = false;
                 self.start_interrupt(bus, InterruptType::Nmi);
-                return StepResult::Pending;
+                return;
             } else if lines.irq && (self.p & psr::I) == 0 {
                 // schedule IRQ micro-ops instead of fetching an opcode
                 self.start_interrupt(bus, InterruptType::Irq);
-                return StepResult::Pending;
+                return;
             }
 
             let opcode = self.fetch_opcode(bus);
@@ -370,8 +384,6 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 _ => (),
             }
         }
-
-        result
     }
 
     fn start_interrupt(&mut self, bus: &mut B, int_type: InterruptType) {
