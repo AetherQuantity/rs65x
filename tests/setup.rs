@@ -33,10 +33,12 @@ pub struct Harness {
 
 impl Default for Harness {
     fn default() -> Self {
+        let mut lines = Lines::default();
+        lines.rdy = true;
         Self {
             mem: [0; 0x10000],
             last: Access::basic_read(0, 0),
-            lines: Default::default(),
+            lines,
             cycle: Default::default(),
             debug_print: false,
         }

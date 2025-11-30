@@ -36,6 +36,7 @@ pub struct Cpu6502<F: Flavor, B: Bus> {
     extra_adc_sbc_cycle: bool,
     prev_nmi: bool,
     pending_nmi: bool,
+    old_i: Option<bool>,
     _f: PhantomData<(F, B)>,
 }
 
@@ -46,7 +47,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             a: 0,
             x: 0,
             y: 0,
-            s: 0xFF,                 // reset default
+            s: 0xFD,                 // reset default
             p: psr::I | psr::U_6502, // I set, U set in pushes on many parts
             pc: 0,
             ucycs: UcycQueue::default(),
@@ -58,6 +59,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             _f: PhantomData,
             prev_nmi: false,
             pending_nmi: false,
+            old_i: None,
         }
     }
 
@@ -142,7 +144,10 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             Pla => self.a = self.alu_set_zn(read),
             Plx => self.x = self.alu_set_zn(read),
             Ply => self.y = self.alu_set_zn(read),
-            Plp => self.p = (read | psr::U_6502) & !psr::B_6502,
+            Plp => {
+                self.old_i = Some(self.p & psr::I != 0);
+                self.p = (read | psr::U_6502) & !psr::B_6502;
+            }
             Bit => {
                 if self.current_inst.unwrap().address_mode
                     == AddressMode::NoMemory(NoMemType::Immediate)
@@ -268,11 +273,17 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             Ror => self.a = self.alu_ror(self.a),
             Clc => self.p &= !psr::C,
             Cld => self.p &= !psr::D,
-            Cli => self.p &= !psr::I,
+            Cli => {
+                self.old_i = Some(self.p & psr::I != 0);
+                self.p &= !psr::I;
+            }
+            Sei => {
+                self.old_i = Some(self.p & psr::I != 0);
+                self.p |= psr::I;
+            }
             Clv => self.p &= !psr::V,
             Sec => self.p |= psr::C,
             Sed => self.p |= psr::D,
-            Sei => self.p |= psr::I,
             Dec => self.a = self.alu_set_zn(self.a.wrapping_sub(1)),
             Dex => self.x = self.alu_set_zn(self.x.wrapping_sub(1)),
             Dey => self.y = self.alu_set_zn(self.y.wrapping_sub(1)),
@@ -289,6 +300,22 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         }
     }
 
+    pub fn next_cycle_read(&self) -> bool {
+        // we need to NOP if this cycle is going to be a read
+        let Some(this_cycle) = self.ucycs.front() else {
+            return true;
+        };
+        if self.current_inst.is_none() {
+            // opcode fetch is a read
+            return true;
+        }
+        if this_cycle.bus.read {
+            return true;
+        }
+        // otherwise, this is a write cycle and it should proceed even if RDY is low
+        false
+    }
+
     pub fn step(&mut self, bus: &mut B) {
         let lines = bus.sample_lines();
         // NMI detection still happens even if RDY is low!
@@ -296,19 +323,10 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             self.pending_nmi = true;
         }
         self.prev_nmi = lines.nmi;
-        if !lines.rdy {
-            // we need to NOP if this cycle is going to be a read
-            let Some(this_cycle) = self.ucycs.front() else {
-                return;
-            };
-            if self.current_inst.is_none() {
-                // opcode fetch is a read
-                return;
-            }
-            if this_cycle.bus.read {
-                return;
-            }
-            // otherwise, this is a write cycle and it should proceed even if RDY is low
+        if !lines.rdy && self.next_cycle_read() {
+            // RDY is low, but we only NOP here if we're on a read cycle
+            //println!("CPU not executing this cycle!");
+            return;
         }
         let Some(instruction) = self.current_inst else {
             let opcode = self.fetch_opcode(bus);
@@ -329,8 +347,28 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             };
             self.scratch.execute_next(&mut ctx, bus, &mut self.ucycs)
         };
-
-        if matches!(result, StepResult::DoOpcodeFetch) {
+        let next_opcode_fetch = matches!(result, StepResult::DoOpcodeFetch);
+        let current_inst_finished = !next_opcode_fetch && self.ucycs.is_empty();
+        if current_inst_finished {
+            // the current instruction is finished, but the bus is not available for opcode fetch
+            // this cycle (we already used it). instead, let's finish the state changes required
+            // by the instruction
+            // note: the bus read / write has already happened. with writes, we're totally done, but
+            // for reads, the read value lives in the internal Op0 latch so we need to copy that where
+            // it needs to go
+            if instruction.memory_action == crate::isa::MemoryAction::Read {
+                self.finish_read(instruction.mnemonic);
+            }
+            match instruction.address_mode {
+                AddressMode::NoMemory(NoMemType::Implied) => {
+                    self.finish_implied(instruction.mnemonic)
+                }
+                AddressMode::Interrupt(InterruptType::Brk) => {
+                    self.p |= psr::I;
+                }
+                _ => (),
+            }
+        } else if next_opcode_fetch {
             let adc_sbc_extra_cycle = matches!(instruction.mnemonic, Mnemonic::Adc | Mnemonic::Sbc)
                 && F::DECIMAL == DecimalSemantics::Cmos65C02
                 && self.p & psr::D != 0
@@ -357,33 +395,20 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
 
             // the instruction finishes here, but we need to read the next opcode for next cycle. first
             // though, this is the point at which we have to service interrupts
+            let irq_disable = self.old_i.unwrap_or(self.p & psr::I != 0);
+            self.old_i = None;
             if self.pending_nmi {
                 // schedule NMI micro-ops instead of fetching an opcode
                 self.pending_nmi = false;
                 self.start_interrupt(bus, InterruptType::Nmi);
                 return;
-            } else if lines.irq && (self.p & psr::I) == 0 {
+            } else if lines.irq && !irq_disable {
                 // schedule IRQ micro-ops instead of fetching an opcode
                 self.start_interrupt(bus, InterruptType::Irq);
                 return;
             }
-
             let opcode = self.fetch_opcode(bus);
             self.prepare_instruction(opcode);
-        }
-        if self.ucycs.is_empty() {
-            if instruction.memory_action == crate::isa::MemoryAction::Read {
-                self.finish_read(instruction.mnemonic);
-            }
-            match instruction.address_mode {
-                AddressMode::NoMemory(NoMemType::Implied) => {
-                    self.finish_implied(instruction.mnemonic)
-                }
-                AddressMode::Interrupt(InterruptType::Brk) => {
-                    self.p |= psr::I;
-                }
-                _ => (),
-            }
         }
     }
 
