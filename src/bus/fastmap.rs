@@ -4,6 +4,7 @@
 //! IO pages go through a small dynamic jump table; only those accesses pay a vtable cost.
 
 use super::{Bus, Lines, OpenBus};
+use core::ptr::NonNull;
 
 const PAGE_SHIFT: u32 = 12; // 4 KiB
 const PAGE_SIZE: usize = 1 << PAGE_SHIFT; // 4096
@@ -17,16 +18,20 @@ enum PageKind {
     Ram = 1,
     Rom = 2,
     Io = 3,
+    RamIo = 4,
+    RomIo = 5,
 }
 
 /// Compact per-page mapping:  
 /// - `ptr`: base pointer for RAM/ROM; unused for Open/Io  
-/// - `aux`: IO slot index when `kind == Io`; otherwise 0  
+/// - `io`: optional NonNull pointer to IO handler when `kind == Io`  
+/// - `io_len`: length for IO overlay pages (if applicable)  
 /// - `kind`: tag
 #[derive(Clone, Copy)]
 struct Page {
     ptr: *mut u8,
-    aux: u16,
+    io: Option<NonNull<dyn IoHandler>>,
+    io_len: u16,
     kind: PageKind,
 }
 
@@ -35,7 +40,8 @@ impl Default for Page {
     fn default() -> Self {
         Self {
             ptr: core::ptr::null_mut(),
-            aux: 0,
+            io: None,
+            io_len: 0,
             kind: PageKind::Open,
         }
     }
@@ -49,7 +55,6 @@ pub trait IoHandler {
 
 pub struct FastMapBus {
     pages: [Page; NUM_PAGES],
-    io: Vec<Box<dyn IoHandler>>, // indexed by Page::Io.slot
     lines: Lines,
     open: OpenBus,
 }
@@ -59,7 +64,6 @@ impl FastMapBus {
     pub fn new() -> Self {
         Self {
             pages: [Page::default(); NUM_PAGES],
-            io: Vec::new(),
             lines: Lines::none(),
             open: OpenBus::default(),
         }
@@ -78,7 +82,8 @@ impl FastMapBus {
         let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
         self.pages[page] = Page {
             ptr: base,
-            aux: 0,
+            io: None,
+            io_len: 0,
             kind: PageKind::Ram,
         };
     }
@@ -90,7 +95,8 @@ impl FastMapBus {
         let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
         self.pages[page] = Page {
             ptr: base as *mut u8,
-            aux: 0,
+            io: None,
+            io_len: 0,
             kind: PageKind::Rom,
         };
     }
@@ -120,18 +126,69 @@ impl FastMapBus {
         unsafe { self.map_rom_page(bank, page_in_bank, ptr) }
     }
 
-    /// Map a 4 KiB page to an IO slot. Returns the slot number used.
+    /// Map a 4 KiB page to an IO slot. Safety: handler must be a valid pointer.
     #[inline]
-    pub fn map_io_page(&mut self, bank: u8, page_in_bank: u8, handler: Box<dyn IoHandler>) -> u16 {
-        let slot = self.io.len() as u16;
-        self.io.push(handler);
+    pub unsafe fn map_io_page(&mut self, bank: u8, page_in_bank: u8, handler: *mut dyn IoHandler) {
         let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
         self.pages[page] = Page {
             ptr: core::ptr::null_mut(),
-            aux: slot,
+            io: Some(unsafe { NonNull::new_unchecked(handler) }),
+            io_len: 0,
             kind: PageKind::Io,
         };
-        slot
+    }
+
+    /// Map a 4 KiB page as RAM with an IO prefix.
+    ///
+    /// Bytes in `[0, io_len)` within this page are handled via `handler`; the rest
+    /// are treated as normal RAM backed by `base`.
+    ///
+    /// Safety:
+    /// - `base` must point to at least 4096 writable bytes for this page.
+    /// - `handler` must remain valid and outlive this `FastMapBus`.
+    /// - The caller must ensure no aliasing violations when using the handler.
+    #[inline]
+    pub unsafe fn map_ram_io_prefix_page(
+        &mut self,
+        bank: u8,
+        page_in_bank: u8,
+        base: *mut u8,
+        handler: *mut dyn IoHandler,
+        io_len: u16,
+    ) {
+        debug_assert!(io_len as usize <= PAGE_SIZE);
+        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
+        self.pages[page] = Page {
+            ptr: base,
+            io: Some(unsafe { NonNull::new_unchecked(handler) }),
+            io_len,
+            kind: PageKind::RamIo,
+        };
+    }
+
+    /// Map a 4 KiB page as ROM with an IO prefix.
+    ///
+    /// Bytes in `[0, io_len)` within this page are handled via `handler`; the rest
+    /// are treated as normal ROM backed by `base`.
+    ///
+    /// Safety: same as `map_ram_io_prefix_page`, but `base` need only be readable.
+    #[inline]
+    pub unsafe fn map_rom_io_prefix_page(
+        &mut self,
+        bank: u8,
+        page_in_bank: u8,
+        base: *const u8,
+        handler: *mut dyn IoHandler,
+        io_len: u16,
+    ) {
+        debug_assert!(io_len as usize <= PAGE_SIZE);
+        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
+        self.pages[page] = Page {
+            ptr: base as *mut u8,
+            io: Some(unsafe { NonNull::new_unchecked(handler) }),
+            io_len,
+            kind: PageKind::RomIo,
+        };
     }
 
     /// Unmap a page to open bus.
@@ -168,6 +225,10 @@ impl FastMapBus {
     pub fn set_be(&mut self, v: bool) {
         self.lines.be = v;
     }
+    #[inline(always)]
+    pub fn open_bus_value(&self) -> u8 {
+        self.open.last
+    }
 }
 
 impl Default for FastMapBus {
@@ -193,6 +254,7 @@ impl Bus for FastMapBus {
                 self.open.drive(v);
                 v
             },
+            PageKind::RamIo | PageKind::RomIo => self.read_overlay(p, addr, vda, vpa),
             _ => self.read_slow(p, addr, vda, vpa),
         }
     }
@@ -212,6 +274,7 @@ impl Bus for FastMapBus {
                 // Writes to ROM ignored but still drive open-bus
                 self.open.drive(data);
             }
+            PageKind::RamIo | PageKind::RomIo => self.write_overlay(p, addr, data, vda, vpa),
             _ => self.write_slow(p, addr, data, vda, vpa),
         }
     }
@@ -225,10 +288,61 @@ impl Bus for FastMapBus {
 impl FastMapBus {
     #[inline(never)]
     #[cold]
+    fn read_overlay(&mut self, p: Page, addr: u32, vda: bool, vpa: bool) -> u8 {
+        let off = (addr & PAGE_MASK) as u16;
+        if off < p.io_len {
+            debug_assert!(p.io.is_some(), "RamIo/RomIo page without handler");
+            let mut nn = p.io.unwrap();
+            let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
+            let v = handler.read(addr, vda, vpa);
+            self.open.drive(v);
+            v
+        } else {
+            debug_assert!(!p.ptr.is_null(), "RamIo/RomIo page without backing ptr");
+            unsafe {
+                let v = core::ptr::read(p.ptr.add(off as usize));
+                self.open.drive(v);
+                v
+            }
+        }
+    }
+
+    #[inline(never)]
+    #[cold]
+    fn write_overlay(&mut self, p: Page, addr: u32, data: u8, vda: bool, vpa: bool) {
+        let off = (addr & PAGE_MASK) as u16;
+        if off < p.io_len {
+            debug_assert!(p.io.is_some(), "RamIo page without handler");
+            let mut nn = p.io.unwrap();
+            let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
+            handler.write(addr, data, vda, vpa);
+            self.open.drive(data);
+        } else {
+            match p.kind {
+                PageKind::RamIo => {
+                    debug_assert!(!p.ptr.is_null(), "RamIo page without backing ptr");
+                    unsafe {
+                        core::ptr::write(p.ptr.add(off as usize), data);
+                    }
+                    self.open.drive(data);
+                }
+                PageKind::RomIo => {
+                    // writes to ROM portion ignored but still drive open bus
+                    self.open.drive(data);
+                }
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    #[inline(never)]
+    #[cold]
     fn read_slow(&mut self, p: Page, addr: u32, vda: bool, vpa: bool) -> u8 {
         match p.kind {
             PageKind::Io => {
-                let handler = &mut self.io[p.aux as usize];
+                debug_assert!(p.io.is_some(), "Io page without handler");
+                let mut nn = p.io.unwrap();
+                let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
                 let v = handler.read(addr, vda, vpa);
                 self.open.drive(v);
                 v
@@ -243,7 +357,9 @@ impl FastMapBus {
     fn write_slow(&mut self, p: Page, addr: u32, data: u8, vda: bool, vpa: bool) {
         match p.kind {
             PageKind::Io => {
-                let handler = &mut self.io[p.aux as usize];
+                debug_assert!(p.io.is_some(), "Io page without handler");
+                let mut nn = p.io.unwrap();
+                let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
                 handler.write(addr, data, vda, vpa);
                 self.open.drive(data);
             }
