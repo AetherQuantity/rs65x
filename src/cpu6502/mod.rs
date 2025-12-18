@@ -113,6 +113,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             x_flag: true,
             action: instruction.memory_action,
             modify_read: !F::RMW_DUMMY_WRITE,
+            opcode,
         };
         instruction
             .address_mode
@@ -425,6 +426,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
             x_flag: true,
             action: instruction.memory_action,
             modify_read: !F::RMW_DUMMY_WRITE,
+            opcode: 0,
         };
         F::Micro::emit_int(&mut self.ucycs, ctx, int_type);
         let mut ctx = MicroCtx6502::<F, B> {

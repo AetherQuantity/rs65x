@@ -284,6 +284,7 @@ pub struct DecodeContext {
     pub x_flag: bool,
     pub action: MemoryAction,
     pub modify_read: bool,
+    pub opcode: u8,
 }
 
 /// Overrideable MicroCode emitters!
