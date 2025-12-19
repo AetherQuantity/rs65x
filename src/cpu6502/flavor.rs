@@ -183,19 +183,11 @@ impl MicroCode for Micro65C02 {
 
     fn emit_cmos_nop(queue: &mut UcycQueue, _ctx: DecodeContext, _bytes: u8, mut cycles: u8) {
         let mut i = 0;
-        let cycles_orig = cycles;
         while cycles > 1 {
             cycles -= 1;
             queue.push(MicroCycle::read(Latch::Pc, Latch::None, i == 0 || i == 2));
             i += 1;
         }
-        println!(
-            "emit_cmos_nop ${:02X}: {} bytes, {} cycles): queue len = {}",
-            _ctx.opcode,
-            _bytes,
-            cycles_orig,
-            queue.len()
-        );
     }
 }
 pub static MICRO_6502: Micro6502 = Micro6502;

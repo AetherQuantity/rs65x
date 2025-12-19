@@ -19,8 +19,8 @@ pub mod bus;
 pub mod cpu6502;
 pub mod isa;
 
-pub use bus::{Bus, FastMapBus, IoHandler, Lines, SimpleBus};
 pub use bus::fastmap;
+pub use bus::{Bus, FastMapBus, Lines, SimpleBus};
 
 /// NMOS 6502 core (original MOS/Rockwell parts).
 pub type Nmos6502<B> = cpu6502::Cpu6502<cpu6502::flavor::NMOS6502, B>;

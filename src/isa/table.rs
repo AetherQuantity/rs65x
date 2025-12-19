@@ -1008,7 +1008,7 @@ define_opcodes! {
 
     /// # USBC (SBC): SBC + NOP
     /// Illegal. Effectively same as normal SBC immediate, instr. E9.
-    Usbc { NoMemory(Immediate) = 0xEB, },
+    Usbc { NoMemory(Immediate) @[Nmos] = 0xEB, },
 
     /// # Jam (or Kill, Halt)
     /// Illegal. CPU enters an infinite loop, eventually constantly reading from 0xFFFF until reset

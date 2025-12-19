@@ -1,15 +1,10 @@
 //! Fast, page-mapped bus for 65x cores.
 //!
-//! Goal: O(1) RAM/ROM access using a 4 KiB page table over the full 16 MiB space.
-//! IO pages go through a small dynamic jump table; only those accesses pay a vtable cost.
+//! Goal: O(1) RAM/ROM access using a page table.
+//! This bus intentionally does not model IO dispatch; clients should intercept IO ranges and
+//! handle side effects externally, then delegate pure memory to FastMapBus.
 
 use super::{Bus, Lines, OpenBus};
-use core::ptr::NonNull;
-
-const PAGE_SHIFT: u32 = 12; // 4 KiB
-const PAGE_SIZE: usize = 1 << PAGE_SHIFT; // 4096
-const PAGE_MASK: u32 = (PAGE_SIZE as u32) - 1;
-const NUM_PAGES: usize = (1 << 24) / PAGE_SIZE; // 16 MiB / 4 KiB = 4096
 
 #[repr(u8)]
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -17,21 +12,14 @@ enum PageKind {
     Open = 0,
     Ram = 1,
     Rom = 2,
-    Io = 3,
-    RamIo = 4,
-    RomIo = 5,
 }
 
 /// Compact per-page mapping:  
-/// - `ptr`: base pointer for RAM/ROM; unused for Open/Io  
-/// - `io`: optional NonNull pointer to IO handler when `kind == Io`  
-/// - `io_len`: length for IO overlay pages (if applicable)  
+/// - `ptr`: base pointer for RAM/ROM; unused for Open  
 /// - `kind`: tag
 #[derive(Clone, Copy)]
 struct Page {
     ptr: *mut u8,
-    io: Option<NonNull<dyn IoHandler>>,
-    io_len: u16,
     kind: PageKind,
 }
 
@@ -40,162 +28,119 @@ impl Default for Page {
     fn default() -> Self {
         Self {
             ptr: core::ptr::null_mut(),
-            io: None,
-            io_len: 0,
             kind: PageKind::Open,
         }
     }
 }
 
-/// Minimal IO handler interface. Implementors may add wait states.
-pub trait IoHandler {
-    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> u8;
-    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool);
-}
-
-pub struct FastMapBus {
-    pages: [Page; NUM_PAGES],
+/// FastMapBus page table: heap-allocated, fixed-size after construction (never reallocates).
+pub struct FastMapBus<const ADDR_BITS: u32, const PAGE_SHIFT: u32> {
+    /// Page table is heap-allocated and never resizes/reallocates after construction.
+    pages: Box<[Page]>,
+    num_pages: usize,
     lines: Lines,
     open: OpenBus,
 }
 
-impl FastMapBus {
+// Common instantiations
+pub type FastMapBus24 = FastMapBus<24, 12>;
+pub type FastMapBus16 = FastMapBus<16, 12>;
+pub type FastMapBus14 = FastMapBus<14, 12>;
+
+impl<const ADDR_BITS: u32, const PAGE_SHIFT: u32> FastMapBus<ADDR_BITS, PAGE_SHIFT> {
     #[inline]
     pub fn new() -> Self {
+        debug_assert!(
+            ADDR_BITS <= 24,
+            "FastMapBus expects <= 24-bit addressing in this core"
+        );
+        debug_assert!(PAGE_SHIFT < ADDR_BITS, "PAGE_SHIFT must be < ADDR_BITS");
+
+        let num_pages = 1usize << (ADDR_BITS - PAGE_SHIFT);
+
+        // One-time allocation. `Box<[Page]>` is fixed-size and can never reallocate.
+        let pages: Box<[Page]> = vec![Page::default(); num_pages].into_boxed_slice();
+
         Self {
-            pages: [Page::default(); NUM_PAGES],
+            pages,
+            num_pages,
             lines: Lines::none(),
             open: OpenBus::default(),
         }
     }
 
-    /// Compute the page index for a 24-bit address.
+    const PAGE_SIZE: usize = 1usize << PAGE_SHIFT;
+    const PAGE_MASK: u32 = (Self::PAGE_SIZE as u32) - 1;
+
     #[inline(always)]
-    fn page_index(addr: u32) -> usize {
-        (addr >> PAGE_SHIFT) as usize
+    const fn addr_mask() -> u32 {
+        // Mask for the configured address width. In debug we also assert the address range
+        // at the call sites; this mask prevents accidental OOB indexing in release.
+        if ADDR_BITS == 32 {
+            u32::MAX
+        } else {
+            (1u32 << ADDR_BITS) - 1
+        }
     }
 
-    /// Map a single 4 KiB page of RAM at (bank,page_in_bank).
-    /// Safety: `base` must point to at least 4096 writable bytes for this page.
-    #[inline]
-    pub unsafe fn map_ram_page(&mut self, bank: u8, page_in_bank: u8, base: *mut u8) {
-        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
-        self.pages[page] = Page {
-            ptr: base,
-            io: None,
-            io_len: 0,
+    /// Compute the page index for an address in this bus' address space.
+    #[inline(always)]
+    fn page_index(addr: u32) -> usize {
+        // Masking keeps accidental high bits from indexing past the table in release builds.
+        // The debug_asserts in read/write still enforce correctness.
+        let a = addr & Self::addr_mask();
+        (a >> PAGE_SHIFT) as usize
+    }
+
+    /// Map a single page of RAM by page index.
+    /// Safe: `slice` is bounds-checked to exactly one page.
+    #[inline(always)]
+    pub fn map_ram_page_idx(&mut self, page_idx: usize, slice: &mut [u8]) {
+        debug_assert_eq!(slice.len(), Self::PAGE_SIZE);
+        debug_assert!(page_idx < self.num_pages);
+        let ptr = slice.as_mut_ptr();
+        self.pages[page_idx] = Page {
+            ptr,
             kind: PageKind::Ram,
         };
     }
 
-    /// Map a single 4 KiB page of ROM at (bank,page_in_bank).
-    /// Safety: `base` must point to at least 4096 readable bytes for this page.
-    #[inline]
-    pub unsafe fn map_rom_page(&mut self, bank: u8, page_in_bank: u8, base: *const u8) {
-        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
-        self.pages[page] = Page {
-            ptr: base as *mut u8,
-            io: None,
-            io_len: 0,
+    /// Map a single page of ROM by page index.
+    #[inline(always)]
+    pub fn map_rom_page_idx(&mut self, page_idx: usize, slice: &[u8]) {
+        debug_assert_eq!(slice.len(), Self::PAGE_SIZE);
+        debug_assert!(page_idx < self.num_pages);
+        let ptr = slice.as_ptr() as *mut u8;
+        self.pages[page_idx] = Page {
+            ptr,
             kind: PageKind::Rom,
         };
     }
 
-    /// Safe wrapper: map a 4 KiB RAM page from a fixed-size slice.
-    ///
-    /// This is zero-cost after inlining; it simply forwards the slice's pointer
-    /// to the unsafe mapping function while preserving Rust's lifetime/aliasing
-    /// guarantees at the call site.
+    /// Unmap a page to open bus by page index.
     #[inline(always)]
-    pub fn map_ram_page_from_slice(
-        &mut self,
-        bank: u8,
-        page_in_bank: u8,
-        slice: &mut [u8; PAGE_SIZE],
-    ) {
-        let ptr = slice.as_mut_ptr();
-        // Safety: &[u8; PAGE_SIZE] guarantees a contiguous 4 KiB region valid for writes.
-        unsafe { self.map_ram_page(bank, page_in_bank, ptr) }
+    pub fn map_open_page_idx(&mut self, page_idx: usize) {
+        debug_assert!(page_idx < self.num_pages);
+        self.pages[page_idx] = Page::default();
     }
 
-    /// Safe wrapper: map a 4 KiB ROM page from a fixed-size slice.
+    /// Map by address (convenience). The address is interpreted in this bus' address space.
     #[inline(always)]
-    pub fn map_rom_page_from_slice(&mut self, bank: u8, page_in_bank: u8, slice: &[u8; PAGE_SIZE]) {
-        let ptr = slice.as_ptr();
-        // Safety: &[u8; PAGE_SIZE] guarantees a contiguous 4 KiB region valid for reads.
-        unsafe { self.map_rom_page(bank, page_in_bank, ptr) }
+    pub fn map_ram_page_at(&mut self, addr: u32, slice: &mut [u8]) {
+        let idx = Self::page_index(addr);
+        self.map_ram_page_idx(idx, slice);
     }
 
-    /// Map a 4 KiB page to an IO slot. Safety: handler must be a valid pointer.
-    #[inline]
-    pub unsafe fn map_io_page(&mut self, bank: u8, page_in_bank: u8, handler: *mut dyn IoHandler) {
-        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
-        self.pages[page] = Page {
-            ptr: core::ptr::null_mut(),
-            io: Some(unsafe { NonNull::new_unchecked(handler) }),
-            io_len: 0,
-            kind: PageKind::Io,
-        };
+    #[inline(always)]
+    pub fn map_rom_page_at(&mut self, addr: u32, slice: &[u8]) {
+        let idx = Self::page_index(addr);
+        self.map_rom_page_idx(idx, slice);
     }
 
-    /// Map a 4 KiB page as RAM with an IO prefix.
-    ///
-    /// Bytes in `[0, io_len)` within this page are handled via `handler`; the rest
-    /// are treated as normal RAM backed by `base`.
-    ///
-    /// Safety:
-    /// - `base` must point to at least 4096 writable bytes for this page.
-    /// - `handler` must remain valid and outlive this `FastMapBus`.
-    /// - The caller must ensure no aliasing violations when using the handler.
-    #[inline]
-    pub unsafe fn map_ram_io_prefix_page(
-        &mut self,
-        bank: u8,
-        page_in_bank: u8,
-        base: *mut u8,
-        handler: *mut dyn IoHandler,
-        io_len: u16,
-    ) {
-        debug_assert!(io_len as usize <= PAGE_SIZE);
-        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
-        self.pages[page] = Page {
-            ptr: base,
-            io: Some(unsafe { NonNull::new_unchecked(handler) }),
-            io_len,
-            kind: PageKind::RamIo,
-        };
-    }
-
-    /// Map a 4 KiB page as ROM with an IO prefix.
-    ///
-    /// Bytes in `[0, io_len)` within this page are handled via `handler`; the rest
-    /// are treated as normal ROM backed by `base`.
-    ///
-    /// Safety: same as `map_ram_io_prefix_page`, but `base` need only be readable.
-    #[inline]
-    pub unsafe fn map_rom_io_prefix_page(
-        &mut self,
-        bank: u8,
-        page_in_bank: u8,
-        base: *const u8,
-        handler: *mut dyn IoHandler,
-        io_len: u16,
-    ) {
-        debug_assert!(io_len as usize <= PAGE_SIZE);
-        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
-        self.pages[page] = Page {
-            ptr: base as *mut u8,
-            io: Some(unsafe { NonNull::new_unchecked(handler) }),
-            io_len,
-            kind: PageKind::RomIo,
-        };
-    }
-
-    /// Unmap a page to open bus.
-    #[inline]
-    pub fn map_open_page(&mut self, bank: u8, page_in_bank: u8) {
-        let page = ((bank as usize) << (16 - PAGE_SHIFT)) | (page_in_bank as usize);
-        self.pages[page] = Page::default();
+    #[inline(always)]
+    pub fn map_open_page_at(&mut self, addr: u32) {
+        let idx = Self::page_index(addr);
+        self.map_open_page_idx(idx);
     }
 
     /// Set the input lines for the next sample.
@@ -231,40 +176,33 @@ impl FastMapBus {
     }
 }
 
-impl Default for FastMapBus {
+impl<const ADDR_BITS: u32, const PAGE_SHIFT: u32> Default for FastMapBus<ADDR_BITS, PAGE_SHIFT> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Bus for FastMapBus {
+impl<const ADDR_BITS: u32, const PAGE_SHIFT: u32> Bus for FastMapBus<ADDR_BITS, PAGE_SHIFT> {
     #[inline(always)]
-    fn read(&mut self, addr: u32, vda: bool, vpa: bool) -> u8 {
-        debug_assert!(addr >> 24 == 0, "address out of 24-bit range");
+    fn read(&mut self, addr: u32, _vda: bool, _vpa: bool) -> u8 {
+        debug_assert!(addr < (1u32 << ADDR_BITS), "address out of range");
         let p = unsafe { *self.pages.get_unchecked(Self::page_index(addr)) }; // copy Page to avoid holding an & borrow
-        let off = (addr & PAGE_MASK) as usize;
+        let off = (addr & Self::PAGE_MASK) as usize;
         match p.kind {
-            PageKind::Ram => unsafe {
+            PageKind::Ram | PageKind::Rom => unsafe {
                 let v = core::ptr::read(p.ptr.add(off));
                 self.open.drive(v);
                 v
             },
-            PageKind::Rom => unsafe {
-                let v = core::ptr::read(p.ptr.add(off));
-                self.open.drive(v);
-                v
-            },
-            PageKind::RamIo | PageKind::RomIo => self.read_overlay(p, addr, vda, vpa),
-            _ => self.read_slow(p, addr, vda, vpa),
+            PageKind::Open => self.open.sample(),
         }
     }
 
     #[inline(always)]
-    fn write(&mut self, addr: u32, data: u8, vda: bool, vpa: bool) {
-        debug_assert!(addr >> 24 == 0, "address out of 24-bit range");
-        let idx = Self::page_index(addr);
-        let p = unsafe { *self.pages.get_unchecked(idx) }; // copy once
-        let off = (addr & PAGE_MASK) as usize;
+    fn write(&mut self, addr: u32, data: u8, _vda: bool, _vpa: bool) {
+        debug_assert!(addr < (1u32 << ADDR_BITS), "address out of range");
+        let p = unsafe { *self.pages.get_unchecked(Self::page_index(addr)) }; // copy once
+        let off = (addr & Self::PAGE_MASK) as usize;
         match p.kind {
             PageKind::Ram => unsafe {
                 core::ptr::write(p.ptr.add(off), data);
@@ -274,99 +212,14 @@ impl Bus for FastMapBus {
                 // Writes to ROM ignored but still drive open-bus
                 self.open.drive(data);
             }
-            PageKind::RamIo | PageKind::RomIo => self.write_overlay(p, addr, data, vda, vpa),
-            _ => self.write_slow(p, addr, data, vda, vpa),
+            PageKind::Open => {
+                self.open.drive(data);
+            }
         }
     }
 
     #[inline(always)]
     fn sample_lines(&mut self) -> Lines {
         self.lines
-    }
-}
-
-impl FastMapBus {
-    #[inline(never)]
-    #[cold]
-    fn read_overlay(&mut self, p: Page, addr: u32, vda: bool, vpa: bool) -> u8 {
-        let off = (addr & PAGE_MASK) as u16;
-        if off < p.io_len {
-            debug_assert!(p.io.is_some(), "RamIo/RomIo page without handler");
-            let mut nn = p.io.unwrap();
-            let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
-            let v = handler.read(addr, vda, vpa);
-            self.open.drive(v);
-            v
-        } else {
-            debug_assert!(!p.ptr.is_null(), "RamIo/RomIo page without backing ptr");
-            unsafe {
-                let v = core::ptr::read(p.ptr.add(off as usize));
-                self.open.drive(v);
-                v
-            }
-        }
-    }
-
-    #[inline(never)]
-    #[cold]
-    fn write_overlay(&mut self, p: Page, addr: u32, data: u8, vda: bool, vpa: bool) {
-        let off = (addr & PAGE_MASK) as u16;
-        if off < p.io_len {
-            debug_assert!(p.io.is_some(), "RamIo page without handler");
-            let mut nn = p.io.unwrap();
-            let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
-            handler.write(addr, data, vda, vpa);
-            self.open.drive(data);
-        } else {
-            match p.kind {
-                PageKind::RamIo => {
-                    debug_assert!(!p.ptr.is_null(), "RamIo page without backing ptr");
-                    unsafe {
-                        core::ptr::write(p.ptr.add(off as usize), data);
-                    }
-                    self.open.drive(data);
-                }
-                PageKind::RomIo => {
-                    // writes to ROM portion ignored but still drive open bus
-                    self.open.drive(data);
-                }
-                _ => unreachable!(),
-            }
-        }
-    }
-
-    #[inline(never)]
-    #[cold]
-    fn read_slow(&mut self, p: Page, addr: u32, vda: bool, vpa: bool) -> u8 {
-        match p.kind {
-            PageKind::Io => {
-                debug_assert!(p.io.is_some(), "Io page without handler");
-                let mut nn = p.io.unwrap();
-                let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
-                let v = handler.read(addr, vda, vpa);
-                self.open.drive(v);
-                v
-            }
-            PageKind::Open => self.open.sample(),
-            _ => unreachable!(),
-        }
-    }
-
-    #[inline(never)]
-    #[cold]
-    fn write_slow(&mut self, p: Page, addr: u32, data: u8, vda: bool, vpa: bool) {
-        match p.kind {
-            PageKind::Io => {
-                debug_assert!(p.io.is_some(), "Io page without handler");
-                let mut nn = p.io.unwrap();
-                let handler: &mut dyn IoHandler = unsafe { nn.as_mut() };
-                handler.write(addr, data, vda, vpa);
-                self.open.drive(data);
-            }
-            PageKind::Open => {
-                self.open.drive(data);
-            }
-            _ => unreachable!(),
-        }
     }
 }

@@ -60,7 +60,7 @@ pub struct OpenBus {
     last: u8,
 }
 
-pub use fastmap::{FastMapBus, IoHandler};
+pub use fastmap::FastMapBus;
 pub use simple::SimpleBus;
 impl OpenBus {
     #[inline(always)]
