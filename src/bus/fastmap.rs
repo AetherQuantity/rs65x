@@ -72,6 +72,10 @@ impl<const ADDR_BITS: u32, const PAGE_SHIFT: u32> FastMapBus<ADDR_BITS, PAGE_SHI
     const PAGE_SIZE: usize = 1usize << PAGE_SHIFT;
     const PAGE_MASK: u32 = (Self::PAGE_SIZE as u32) - 1;
 
+    pub const fn page_size(&self) -> usize {
+        Self::PAGE_SIZE
+    }
+
     #[inline(always)]
     const fn addr_mask() -> u32 {
         // Mask for the configured address width. In debug we also assert the address range
@@ -171,8 +175,12 @@ impl<const ADDR_BITS: u32, const PAGE_SHIFT: u32> FastMapBus<ADDR_BITS, PAGE_SHI
         self.lines.be = v;
     }
     #[inline(always)]
-    pub fn open_bus_value(&self) -> u8 {
-        self.open.last
+    pub fn sample_open_bus(&self) -> u8 {
+        self.open.sample()
+    }
+    #[inline(always)]
+    pub fn drive_open_bus(&mut self, value: u8) {
+        self.open.drive(value)
     }
 }
 
