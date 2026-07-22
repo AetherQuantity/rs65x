@@ -1,3 +1,6 @@
 /target
 **/.DS_Store
 .github
+/tests/nes6502/
+/tests/nmos/
+/tests/wdc65c02/
