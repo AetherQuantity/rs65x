@@ -4,5 +4,6 @@
 /tests/nes6502/
 /tests/nmos/
 /tests/wdc65c02/
+/tests/65x02-main.zip
 /research/
 .gitignore
