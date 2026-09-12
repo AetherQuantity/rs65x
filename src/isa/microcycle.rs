@@ -103,7 +103,7 @@ pub enum AluOp {
     OffsetWithExtraCycle(OffsetType),
     DecSp,
     Modify,
-    JumpToEa,
+    SwapEaPc,
     IncLatch(Latch),
     Branch,
     SetPc(u16),
@@ -167,7 +167,7 @@ impl MicroCycle {
                 vpa: false, // literally impossible for vpa to be true on write
                 read: false,
             },
-            inc_src: false,
+            inc_src: false, // bad variable names: if true would actually inc SP
             local_latch: src,
             alu: AluOp::DecSp,
         }
@@ -371,7 +371,7 @@ pub trait MicroCode {
             },
             inc_src: true,
             local_latch: Latch::EaHi,
-            alu: AluOp::JumpToEa,
+            alu: AluOp::SwapEaPc,
         });
     }
 
@@ -410,11 +410,12 @@ pub trait MicroCode {
             },
             inc_src: false,
             local_latch: Latch::None,
-            alu: AluOp::JumpToEa, // ready for next opcode fetch!
+            alu: AluOp::SwapEaPc, // ready for next opcode fetch!
         });
         // first have to push PC Hi and Lo to the stack though
-        queue.push(MicroCycle::push(Latch::PcHi));
-        queue.push(MicroCycle::push(Latch::PcLo));
+        // we've swapped Ea and Pc, which means Ea contains old Pc
+        queue.push(MicroCycle::push(Latch::EaHi));
+        queue.push(MicroCycle::push(Latch::EaLo));
     }
 
     fn emit_rts(queue: &mut UcycQueue, _ctx: DecodeContext) {

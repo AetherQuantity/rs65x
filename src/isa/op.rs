@@ -228,8 +228,10 @@ impl MicroExecutor {
             AluOp::Modify => {
                 ctx.alu_modify(self);
             }
-            AluOp::JumpToEa => {
+            AluOp::SwapEaPc => {
+                let temp = ctx.pc();
                 ctx.set_pc(self.ea as u16);
+                self.ea = temp as u32;
             }
             AluOp::Branch => {
                 if ctx.alu_branch(self, queue) {

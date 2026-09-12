@@ -78,7 +78,7 @@ fn emit_jsr_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
         },
         inc_src: false,
         local_latch: Latch::EaHi,
-        alu: AluOp::JumpToEa, // ready for next opcode fetch!
+        alu: AluOp::SwapEaPc, // ready for next opcode fetch!
     });
 }
 
