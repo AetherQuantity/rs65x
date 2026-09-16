@@ -5,12 +5,12 @@ use rs65x::{
 use serde_json;
 use std::fs;
 
-use crate::setup::{Access, Harness, SingleStepCase, State};
-
-mod setup;
+use crate::common::init_logger;
+use crate::common::setup::{Access, Harness, SingleStepCase, State};
 
 #[test]
 fn run_all() {
+    init_logger(log::LevelFilter::Warn);
     for op in 0x00..=0xFF {
         let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
         println!(
@@ -23,6 +23,7 @@ fn run_all() {
 
 #[test]
 fn run_single() {
+    init_logger(log::LevelFilter::Warn);
     let op = 0xE1;
     let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
     println!(
@@ -33,7 +34,7 @@ fn run_single() {
 }
 
 fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
-    let path = format!("tests/nmos/{op:02X}.json");
+    let path = format!("tests/data/nmos/{op:02X}.json");
     let json = fs::read_to_string(&path).map_err(|_| "opcode not found")?;
     // The top-level JSON is an array of test cases
     let tests: Vec<SingleStepCase> =

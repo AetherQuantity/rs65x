@@ -1,5 +1,6 @@
 use std::{fs::File, io::Read, time::Instant};
 
+use crate::common::init_logger;
 use rs65x::{
     FastMapBus,
     cpu6502::{
@@ -10,10 +11,11 @@ use rs65x::{
 
 #[test]
 fn functional_tests() {
+    init_logger(log::LevelFilter::Warn);
     let mut bus = FastMapBus::new();
     let mut cpu: Cpu6502<NMOS6502, FastMapBus<16, 12>> = Cpu6502::new();
 
-    let mut f = File::open("tests/func_tests/6502_functional_test.bin").unwrap();
+    let mut f = File::open("tests/data/func_tests/6502_functional_test.bin").unwrap();
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).unwrap();
     let mut page = 0;
@@ -43,7 +45,7 @@ fn extended_opcode_tests() {
     let mut bus = FastMapBus::new();
     let mut cpu: Cpu6502<CMOS65C02, FastMapBus<16, 12>> = Cpu6502::new();
 
-    let mut f = File::open("tests/func_tests/65C02_extended_opcodes_test.bin").unwrap();
+    let mut f = File::open("tests/data/func_tests/65C02_extended_opcodes_test.bin").unwrap();
     let mut buf = Vec::new();
     f.read_to_end(&mut buf).unwrap();
     let mut page = 0;

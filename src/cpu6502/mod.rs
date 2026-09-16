@@ -19,7 +19,8 @@ use crate::{alu, psr};
 
 use flavor::DecimalSemantics;
 
-pub use flavor::Flavor; // re-export for convenience
+pub use flavor::Flavor;
+use log::{trace, warn}; // re-export for convenience
 
 /// CPU registers/state for a plain 6502-like core (8-bit A/X/Y, 16-bit PC).
 pub struct Cpu6502<F: Flavor, B: Bus> {
@@ -104,10 +105,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     fn prepare_instruction(&mut self, opcode: u8) {
         let instruction = Instruction::from_byte(opcode, F::OPCODE_TABLE);
         if instruction.mnemonic == Mnemonic::Jam {
-            println!(
-                "WARNING, JAM reached, opcode {opcode:02X} at {:04X}",
-                self.pc
-            );
+            warn!("JAM reached, opcode {opcode:02X} at {:04X}", self.pc);
         }
         self.current_opcode = opcode;
         self.current_inst = Some(instruction);
@@ -327,7 +325,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
         self.prev_nmi = lines.nmi;
         if !lines.rdy && self.next_cycle_read() {
             // RDY is low, but we only NOP here if we're on a read cycle
-            //println!("CPU not executing this cycle!");
+            trace!("CPU not executing this cycle!");
             return;
         }
         let Some(instruction) = self.current_inst else {
@@ -415,7 +413,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
     }
 
     fn start_interrupt(&mut self, bus: &mut B, int_type: InterruptType) {
-        //println!("STARTING INTERRUPT!");
+        trace!("STARTING INTERRUPT!");
         let instruction = Instruction::from_byte(0, F::OPCODE_TABLE);
         self.current_opcode = 0; // BRK used for all interrupts, interestingly
         self.current_inst = Some(instruction);

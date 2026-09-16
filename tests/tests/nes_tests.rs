@@ -1,18 +1,18 @@
 use rs65x::{
-    cpu6502::{Cpu6502, flavor::CMOS65C02},
+    cpu6502::{Cpu6502, flavor::NES},
     isa::table::{Instruction, OpcodeTable},
 };
 use serde_json;
 use std::fs;
 
-use crate::setup::{Access, Harness, SingleStepCase, State};
-
-mod setup;
+use crate::common::init_logger;
+use crate::common::setup::{Access, Harness, SingleStepCase, State};
 
 #[test]
 fn run_all() {
+    init_logger(log::LevelFilter::Warn);
     for op in 0x00..=0xFF {
-        let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
+        let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
         println!(
             "Starting [{op:02X}] {}, {}",
             inst.mnemonic, inst.address_mode,
@@ -23,8 +23,9 @@ fn run_all() {
 
 #[test]
 fn run_single() {
-    let op = 0xEB;
-    let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
+    init_logger(log::LevelFilter::Warn);
+    let op = 0x00;
+    let inst = Instruction::from_byte(op, OpcodeTable::Nmos);
     println!(
         "Starting [{op:02X}] {}, {}",
         inst.mnemonic, inst.address_mode,
@@ -33,7 +34,7 @@ fn run_single() {
 }
 
 fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
-    let path = format!("tests/wdc65c02/{op:02X}.json");
+    let path = format!("tests/data/nes6502/{op:02X}.json");
     let json = fs::read_to_string(&path).map_err(|_| "opcode not found")?;
     // The top-level JSON is an array of test cases
     let tests: Vec<SingleStepCase> =
@@ -49,16 +50,13 @@ fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
             cpu.step(&mut bus);
             assert_cycle(cycle, &bus.last_cycle());
         }
-        if debug {
-            println!("All bus activity correct! Checking for final state");
-        }
         assert_final(&cpu, &bus, &test.r#final);
     }
     Ok(())
 }
 
-pub fn setup_initial(initial: &State) -> (Cpu6502<CMOS65C02, Harness>, Harness) {
-    let mut cpu = Cpu6502::<CMOS65C02, Harness>::new();
+pub fn setup_initial(initial: &State) -> (Cpu6502<NES, Harness>, Harness) {
+    let mut cpu = Cpu6502::<NES, Harness>::new();
     cpu.pc = initial.pc;
     cpu.a = initial.a;
     cpu.s = initial.s;
@@ -76,9 +74,6 @@ pub fn assert_cycle(expected: &Access, actual: &Access) {
     if expected == actual {
         return;
     }
-    println!();
-    println!("Expected: {expected:?}");
-    println!("Actual:   {actual:?}");
     // we failed an assert here
     assert!(
         expected.access_type == actual.access_type,
@@ -100,7 +95,7 @@ pub fn assert_cycle(expected: &Access, actual: &Access) {
     );
 }
 
-pub fn assert_final(cpu: &Cpu6502<CMOS65C02, Harness>, bus: &Harness, fin: &State) {
+pub fn assert_final(cpu: &Cpu6502<NES, Harness>, bus: &Harness, fin: &State) {
     assert!(
         cpu.pc == fin.pc,
         "PC mismatch: Expected {:04X}, Actual {:04X}",

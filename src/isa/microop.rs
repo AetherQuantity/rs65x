@@ -1,3 +1,5 @@
+use log::trace;
+
 use crate::isa::{InterruptType, Latch, MemoryAction, OffsetType};
 
 const MAX_UCYC: usize = 14;
@@ -61,7 +63,7 @@ impl UcycQueue {
     #[inline(always)]
     pub fn insert(&mut self, new: MicroOp) {
         debug_assert!(self.head > 0);
-        //println!("inserting into buf[{}]", self.head);
+        trace!("inserting into buf[{}]", self.head);
         self.head -= 1;
         unsafe { *self.buf.get_unchecked_mut(self.head as usize) = new }
     }

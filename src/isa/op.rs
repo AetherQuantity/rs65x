@@ -4,6 +4,8 @@
 //! It defines *metadata* that opcode tables for different cores can reuse without duplication.
 //! Each core (8‑bit or 16‑bit) can wrap these with its own exec function pointers later.
 
+use log::{debug, trace};
+
 use crate::{
     bus::Bus,
     isa::{
@@ -148,7 +150,7 @@ impl MicroExecutor {
                     || (self.memory_action == MemoryAction::ReadModifyWrite && is_incdec_abs_x);
 
                 if need_dummy_this_cycle {
-                    //println!("ea {:#06X} != target ea {target_ea:#06X}", self.ea);
+                    debug!("ea {:#06X} != target ea {target_ea:#06X}", self.ea);
                     if !ctx.read_invalid_on_page_cross() {
                         // on CMOS chips we don't do a read of the invalid location!
                         // instead, we read the current pc again (PC+2)
@@ -217,7 +219,7 @@ impl MicroExecutor {
                 {
                     // on CMOS, for *normal* RMW (ASL/LSR/ROL/ROR abs,X) with no page-cross:
                     // we just read the correct EA, so we can skip the extra read phase.
-                    //println!("popping first of queue (len {} pre-pop", queue.len());
+                    trace!("popping first of queue (len {} pre-pop", queue.len());
                     queue.pop();
                 }
             }
@@ -236,7 +238,7 @@ impl MicroExecutor {
             AluOp::Branch => {
                 if ctx.alu_branch(self, queue) {
                     // branch taken!
-                    //println!("branch taken!");
+                    trace!("branch taken!");
                     // we need to figure out if we are branching to the same page or a different one
                     let new_pc = ctx.pc().wrapping_add_signed(self.signed_offset8 as i16);
                     let maybe_invalid = (ctx.pc() & 0xFF00) | (new_pc & 0xFF);
@@ -258,7 +260,7 @@ impl MicroExecutor {
                     }
                     // then, stick a fork in us, we're done
                 } else {
-                    //println!("branch not taken!");
+                    trace!("branch not taken!");
                     // branch not taken! next cycle is opcode fetch
                     queue.clear();
                 }
