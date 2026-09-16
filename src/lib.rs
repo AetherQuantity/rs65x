@@ -15,6 +15,7 @@
 //! cpu.reset(&mut bus);
 //! ```
 
+mod alu;
 pub mod bus;
 pub mod cpu6502;
 pub mod isa;

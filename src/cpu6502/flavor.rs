@@ -8,20 +8,11 @@
 
 use crate::isa::{
     Latch,
-    microcycle::{AluOp, BusCycle, DecodeContext, MicroCode, MicroCycle, UcycQueue},
+    microop::{AluOp, BusCycle, DecodeContext, MicroCode, MicroOp, UcycQueue},
     table::OpcodeTable,
 };
 
-/// Decimal (BCD) arithmetic semantics used by ADC/SBC when the D flag is set.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DecimalSemantics {
-    /// NES Ricoh chip without any DEC behavior at all
-    None,
-    /// NMOS 6502 behavior (original 6502 rules)
-    Nmos6502,
-    /// CMOS behavior (65C02, WDC, etc.)
-    Cmos65C02,
-}
+pub use crate::alu::DecimalSemantics;
 
 /// Compile‑time flavor contract for a 6502‑family core.
 ///
@@ -64,12 +55,12 @@ pub trait Flavor {
 /// While the cycle count between the 816 and 6502 remain the same (6), the cycles actually happen in a
 /// different order!
 fn emit_jsr_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
-    queue.push(MicroCycle::read(Latch::Pc, Latch::EaLo, true));
+    queue.push(MicroOp::read(Latch::Pc, Latch::EaLo, true));
     // internal op:
-    queue.push(MicroCycle::read(Latch::Sp, Latch::None, false));
-    queue.push(MicroCycle::push(Latch::PcHi));
-    queue.push(MicroCycle::push(Latch::PcLo));
-    queue.push(MicroCycle {
+    queue.push(MicroOp::read(Latch::Sp, Latch::None, false));
+    queue.push(MicroOp::push(Latch::PcHi));
+    queue.push(MicroOp::push(Latch::PcLo));
+    queue.push(MicroOp {
         bus: BusCycle {
             addr: Latch::Pc,
             vda: false,
@@ -84,11 +75,11 @@ fn emit_jsr_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
 
 /// Slightly different dummy reads
 fn emit_rts_8bit(queue: &mut UcycQueue, _ctx: DecodeContext) {
-    queue.push(MicroCycle::dummy_read(Latch::Pc));
-    queue.push(MicroCycle::read(Latch::Sp, Latch::None, true));
-    queue.push(MicroCycle::read(Latch::Sp, Latch::PcLo, true));
-    queue.push(MicroCycle::read(Latch::Sp, Latch::PcHi, false));
-    queue.push(MicroCycle::read(Latch::Pc, Latch::None, true));
+    queue.push(MicroOp::dummy_read(Latch::Pc));
+    queue.push(MicroOp::read(Latch::Sp, Latch::None, true));
+    queue.push(MicroOp::read(Latch::Sp, Latch::PcLo, true));
+    queue.push(MicroOp::read(Latch::Sp, Latch::PcHi, false));
+    queue.push(MicroOp::read(Latch::Pc, Latch::None, true));
 }
 
 pub struct Micro6502;
@@ -101,11 +92,11 @@ impl MicroCode for Micro6502 {
     /// note: we don't need to deal with OffsetType as it is always None: there is no
     /// such thing as JMP (IND,X) on the NMOS6502. It was introduced on the CMOS variants
     fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext) {
-        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
-        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
+        queue.push(MicroOp::read(Latch::Pc, Latch::PtrLo, true));
+        queue.push(MicroOp::read(Latch::Pc, Latch::PtrHi, false));
         // read Ptr, but instead of automatically incrementing it (which would result in the
         // correct high byte address), we use the custom AluOp to just increment PtrLo instead:
-        queue.push(MicroCycle {
+        queue.push(MicroOp {
             bus: BusCycle {
                 addr: Latch::Ptr,
                 vda: true, // 6502 doesnt have vda/vpa who cares
@@ -116,7 +107,7 @@ impl MicroCode for Micro6502 {
             local_latch: Latch::PcLo,
             alu: AluOp::IncLatch(Latch::PtrLo), // wraps around on Lo byte, does not affect Hi
         });
-        queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
+        queue.push(MicroOp::read(Latch::Ptr, Latch::PcHi, false));
     }
 
     fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -128,23 +119,11 @@ impl MicroCode for Micro6502 {
     }
 
     fn emit_jam(queue: &mut UcycQueue, _ctx: DecodeContext) {
-        queue.push(MicroCycle::read(Latch::Pc, Latch::None, false));
-        queue.push(MicroCycle::read(
-            Latch::Constant(0xFFFF),
-            Latch::None,
-            false,
-        ));
-        queue.push(MicroCycle::read(
-            Latch::Constant(0xFFFE),
-            Latch::None,
-            false,
-        ));
-        queue.push(MicroCycle::read(
-            Latch::Constant(0xFFFE),
-            Latch::None,
-            false,
-        ));
-        queue.push(MicroCycle {
+        queue.push(MicroOp::read(Latch::Pc, Latch::None, false));
+        queue.push(MicroOp::read(Latch::Constant(0xFFFF), Latch::None, false));
+        queue.push(MicroOp::read(Latch::Constant(0xFFFE), Latch::None, false));
+        queue.push(MicroOp::read(Latch::Constant(0xFFFE), Latch::None, false));
+        queue.push(MicroOp {
             bus: BusCycle {
                 addr: Latch::Constant(0xFFFF),
                 vda: false,
@@ -155,7 +134,7 @@ impl MicroCode for Micro6502 {
             local_latch: Latch::None,
             alu: AluOp::Jam,
         });
-        queue.push(MicroCycle::dummy_read(Latch::None)); // this will never be reached, we just dont want the queue to be empty
+        queue.push(MicroOp::dummy_read(Latch::None)); // this will never be reached, we just dont want the queue to be empty
     }
 }
 
@@ -166,11 +145,11 @@ impl MicroCode for Micro65C02 {
     /// The bugfix results in correct page for the pointer high byte, at the cost of
     /// one extra cycle: both JMP (IND) and JMP (IND,X) take six cycles
     fn emit_jmpind(queue: &mut UcycQueue, _ctx: DecodeContext) {
-        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrLo, true));
-        queue.push(MicroCycle::read(Latch::Pc, Latch::PtrHi, false));
-        queue.push(MicroCycle::read_ptr1(Latch::PcLo));
-        queue.push(MicroCycle::read_inv_ptr2(Latch::PcHi));
-        queue.push(MicroCycle::read(Latch::Ptr, Latch::PcHi, false));
+        queue.push(MicroOp::read(Latch::Pc, Latch::PtrLo, true));
+        queue.push(MicroOp::read(Latch::Pc, Latch::PtrHi, false));
+        queue.push(MicroOp::read_ptr1(Latch::PcLo));
+        queue.push(MicroOp::read_inv_ptr2(Latch::PcHi));
+        queue.push(MicroOp::read(Latch::Ptr, Latch::PcHi, false));
     }
 
     fn emit_jsr(queue: &mut UcycQueue, _ctx: DecodeContext) {
@@ -185,7 +164,7 @@ impl MicroCode for Micro65C02 {
         let mut i = 0;
         while cycles > 1 {
             cycles -= 1;
-            queue.push(MicroCycle::read(Latch::Pc, Latch::None, i == 0 || i == 2));
+            queue.push(MicroOp::read(Latch::Pc, Latch::None, i == 0 || i == 2));
             i += 1;
         }
     }

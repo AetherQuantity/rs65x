@@ -1,4 +1,4 @@
-pub mod microcycle;
+pub mod microop;
 pub mod op;
 pub mod table;
 
@@ -69,7 +69,7 @@ use core::fmt;
 
 pub use address_mode_subtypes::*;
 
-use crate::isa::microcycle::{DecodeContext, MicroCode, UcycQueue};
+use crate::isa::microop::{DecodeContext, MicroCode, UcycQueue};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
 pub enum AddressMode {

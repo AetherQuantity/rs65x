@@ -858,7 +858,7 @@ define_opcodes! {
     /// Illegal. Highly unstable.
     ///
     /// A base value in A is determined based on the contets of A and a constant, which may be typically
-    /// $00, $ff, $ee, etc. The value of this constant depends on temerature, the chip series, and maybe
+    /// $00, $ff, $ee, etc. The value of this constant depends on temperature, the chip series, and maybe
     /// other factors, as well. In order to eliminate these uncertaincies from the equation, use either
     /// 0 as the operand or a value of $FF in the accumulator.
     Ane { NoMemory(Immediate) @[Nmos] = 0x8B, },

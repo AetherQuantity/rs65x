@@ -8,7 +8,7 @@ use crate::{
     bus::Bus,
     isa::{
         Latch, MemoryAction,
-        microcycle::{AluOp, MicroCycle, UcycQueue},
+        microop::{AluOp, MicroOp, UcycQueue},
     },
     psr,
 };
@@ -247,14 +247,14 @@ impl MicroExecutor {
                         // fixing it!
                         if ctx.opcode() & 0x0F == 0x0F {
                             // on CMOS BBR/BBS instructions we read the PC again as we fix the Ea internally
-                            queue.push(MicroCycle::read(Latch::Pc, Latch::None, false));
+                            queue.push(MicroOp::read(Latch::Pc, Latch::None, false));
                         } else {
                             // otherwise, we read the invalid locations
-                            queue.push(MicroCycle::read_pc_set_pc(maybe_invalid));
+                            queue.push(MicroOp::read_pc_set_pc(maybe_invalid));
                         }
-                        queue.push(MicroCycle::read_pc_set_pc(new_pc));
+                        queue.push(MicroOp::read_pc_set_pc(new_pc));
                     } else {
-                        queue.push(MicroCycle::read_pc_set_pc(new_pc));
+                        queue.push(MicroOp::read_pc_set_pc(new_pc));
                     }
                     // then, stick a fork in us, we're done
                 } else {
