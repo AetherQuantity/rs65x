@@ -1,9 +1,8 @@
 /target
 **/.DS_Store
 .github
-/tests/data/nes6502/
-/tests/data/nmos/
-/tests/data/wdc65c02/
-/tests/data/65x02-main.zip
+/tests/data/*.zip
 /research/
 .gitignore
+/tests/data/65x02/
+/tests/data/65x02-main/

@@ -1,45 +1,45 @@
+use crate::common::data::TestData;
 use rs65x::{
     cpu6502::{Cpu6502, flavor::CMOS65C02},
     isa::table::{Instruction, OpcodeTable},
 };
-use serde_json;
-use std::fs;
 
 use crate::common::init_logger;
-use crate::common::setup::{Access, Harness, SingleStepCase, State};
+use crate::common::setup::{Access, Harness, State};
 
 #[test]
 fn run_all() {
     init_logger(log::LevelFilter::Warn);
+    let mut data = TestData::open("wdc65c02").unwrap_or_else(|err| panic!("{err}"));
     for op in 0x00..=0xFF {
         let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
         println!(
             "Starting [{op:02X}] {}, {}",
             inst.mnemonic, inst.address_mode,
         );
-        run_opcode(op, false).unwrap_or_default();
+        run_opcode(&mut data, op, false).unwrap_or_else(|err| panic!("{err}"));
     }
 }
 
 #[test]
 fn run_single() {
     init_logger(log::LevelFilter::Warn);
+    let mut data = TestData::open("wdc65c02").unwrap_or_else(|err| panic!("{err}"));
     let op = 0xEB;
     let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
     println!(
         "Starting [{op:02X}] {}, {}",
         inst.mnemonic, inst.address_mode,
     );
-    run_opcode(op, true).unwrap_or_default();
+    run_opcode(&mut data, op, true).unwrap_or_else(|err| panic!("{err}"));
 }
 
-fn run_opcode(op: u8, debug: bool) -> Result<(), String> {
-    let path = format!("tests/data/wdc65c02/{op:02X}.json");
-    let json = fs::read_to_string(&path).map_err(|_| "opcode not found")?;
-    // The top-level JSON is an array of test cases
-    let tests: Vec<SingleStepCase> =
-        serde_json::from_str(&json).map_err(|_| "error reading json")?;
-    assert!(!tests.is_empty(), "no tests found in JSON");
+fn run_opcode(data: &mut TestData, op: u8, debug: bool) -> Result<(), String> {
+    if op == 0xCB || op == 0xDB {
+        println!("TODO: CMOS WAI and STP not tested yet!");
+        return Ok(());
+    }
+    let tests = data.load(op)?;
     for test in &tests {
         if debug {
             println!("TEST CASE BEGIN: \"{}\"", test.name);

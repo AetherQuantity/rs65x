@@ -1,3 +1,4 @@
+pub mod data;
 pub mod setup;
 
 pub fn init_logger(lv: log::LevelFilter) {
@@ -5,5 +6,5 @@ pub fn init_logger(lv: log::LevelFilter) {
     if std::env::var("RUST_LOG").is_err() {
         log_builder.filter_module("rs65x", lv);
     }
-    log_builder.init();
+    let _ = log_builder.try_init();
 }
