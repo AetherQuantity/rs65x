@@ -381,7 +381,7 @@ impl<F: Flavor, B: Bus> Cpu6502<F, B> {
                 // still have to do our bus read though
                 let addr = if matches!(instruction.address_mode, AddressMode::NoMemory(_)) {
                     match instruction.mnemonic {
-                        Mnemonic::Adc => 0x7F,
+                        Mnemonic::Adc => F::DECIMAL_ADC_IMMEDIATE_READ,
                         Mnemonic::Sbc => 0x00,
                         _ => unreachable!(),
                     }

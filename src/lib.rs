@@ -27,13 +27,18 @@ pub use bus::{Bus, FastMapBus, Lines, SimpleBus};
 pub type Nmos6502<B> = cpu6502::Cpu6502<cpu6502::flavor::NMOS6502, B>;
 /// NES Ricoh 2A03/2A07 variant (decimal mode disabled).
 pub type Nes6502<B> = cpu6502::Cpu6502<cpu6502::flavor::NES, B>;
-/// CMOS 65C02 core with Rockwell extensions enabled.
-pub type Cmos65c02<B> = cpu6502::Cpu6502<cpu6502::flavor::CMOS65C02, B>;
+
+/// Synertek 65C02 core
+pub type Synertek65c02<B> = cpu6502::Cpu6502<cpu6502::flavor::Synertek65C02, B>;
+/// Rockwell 65C02 core
+pub type Rockwell65c02<B> = cpu6502::Cpu6502<cpu6502::flavor::Rockwell65C02, B>;
+/// WDC 65C02 core
+pub type Wdc65c02<B> = cpu6502::Cpu6502<cpu6502::flavor::WDC65C02, B>;
 
 /// Grab the most common types without digging through modules.
 pub mod prelude {
     pub use crate::{
-        Cmos65c02, Nes6502, Nmos6502, SimpleBus,
+        Nes6502, Nmos6502, Rockwell65c02, SimpleBus, Synertek65c02, Wdc65c02,
         bus::{Bus, Lines},
     };
 }

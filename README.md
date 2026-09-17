@@ -7,7 +7,7 @@ Obligatory 6502 emulator learning project
 - Cycle accuracy!
 - Passes NMOS and CMOS Klaus2m5 functional tests!
 - Passes all applicable SingleStepTests (65x02)!
-- NMOS, CMOS, NES instruction sets (including Rockwell!)
+- NMOS, NES, Synertek 65C02, Rockwell 65C02, and WDC 65C02 instruction sets
 - Not suitable for actually writing an emulator with because it's still slow and buggy!!!
 
 ## TODOs
@@ -35,6 +35,8 @@ suite). Preserve the upstream layout, including the `v1` directories:
 tests/data/65x02-main/
   6502/v1/00.json ... ff.json
   nes6502/v1/00.json ... ff.json
+  synertek65c02/v1/00.json ... ff.json
+  rockwell65c02/v1/00.json ... ff.json
   wdc65c02/v1/00.json ... ff.json
 ```
 
@@ -42,3 +44,9 @@ Missing files, unreadable or corrupt archives, and invalid or empty test JSON
 fail the tests. Once a source is selected for a suite, loading errors never
 fall back to another source. Test data is kept outside version control; use the
 same upstream revision when comparing results between machines.
+
+The `wdc_tests`, `rockwell_tests`, `synertek_tests`, `nes_tests`, and
+`nmos_tests` modules correspond to the five upstream suites. Synertek and
+Rockwell cover all 256 opcodes. The WDC sweep
+explicitly excludes WAI (`CB`) and STP (`DB`), whose upstream files are empty;
+their execution behavior still needs implementation and dedicated tests.

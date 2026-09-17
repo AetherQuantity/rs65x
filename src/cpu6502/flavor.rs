@@ -28,6 +28,10 @@ pub trait Flavor {
     /// Decimal (BCD) behavior when the D flag is set.
     const DECIMAL: DecimalSemantics;
 
+    /// Extra decimal ADC-immediate cycle address observed in the SingleStepTests fixtures.
+    /// This models the tested chip variants; it is not an architectural address guarantee.
+    const DECIMAL_ADC_IMMEDIATE_READ: u32 = 0x00;
+
     /// NMOS quirk: JMP (indirect) wraps within the page (e.g., $xxFF reads high from $xx00).
     const JMP_INDIRECT_WRAP_BUG: bool;
 
@@ -39,14 +43,6 @@ pub trait Flavor {
     /// Whether classic NMOS‑style dummy writes occur during RMW sequences on zero page/abs.
     /// Aapparently according to Rockwell documentation CMOS chips replace the dummy write with a read instead
     const RMW_DUMMY_WRITE: bool;
-
-    /// Additional opcodes present in CMOS 65C02 and/or WDC variants.
-    const HAS_BRA: bool; // Branch Always (relative)
-    const HAS_STZ: bool; // Store Zero
-    const HAS_WAI_STP: bool; // Wait‑for‑Interrupt / Stop
-
-    /// Rockwell bit manipulation extensions.
-    const HAS_ROCKWELL_OPS: bool; // RMB, SMB, BBR, BBS: setting, resetting, and testing bits in zp
 
     /// Opcode decode table used by this flavor.
     const OPCODE_TABLE: OpcodeTable;
@@ -160,13 +156,21 @@ impl MicroCode for Micro65C02 {
         emit_rts_8bit(queue, _ctx);
     }
 
-    fn emit_cmos_nop(queue: &mut UcycQueue, _ctx: DecodeContext, _bytes: u8, mut cycles: u8) {
+    fn emit_cmos_nop(queue: &mut UcycQueue, _ctx: DecodeContext, bytes: u8, mut cycles: u8) {
+        // Synertek's three-cycle NOP consumes both operand bytes without a dummy read
+        if bytes == 3 && cycles == 3 {
+            queue.push(MicroOp::read(Latch::Pc, Latch::None, true));
+            queue.push(MicroOp::read(Latch::Pc, Latch::None, true));
+            return;
+        }
+        // Otherwise, WDC and Rockwell (and non CB/DB Synertek NOPs) only inc Pc every other cycle
         let mut i = 0;
         while cycles > 1 {
             cycles -= 1;
             queue.push(MicroOp::read(Latch::Pc, Latch::None, i == 0 || i == 2));
             i += 1;
         }
+        // TODO: we should probably do this better
     }
 }
 pub static MICRO_6502: Micro6502 = Micro6502;
@@ -174,8 +178,12 @@ pub static MICRO_65C02: Micro65C02 = Micro65C02;
 
 /// Marker for the original NMOS 6502.
 pub enum NMOS6502 {}
-/// Marker for the baseline CMOS 65C02 (without Rockwell extensions).
-pub enum CMOS65C02 {}
+/// Marker for the WDC 65C02 instruction set, including Rockwell bit operations and WAI/STP.
+pub enum WDC65C02 {}
+/// Marker for the Synertek 65C02. No WAI/STP, no Rockwell bit operations.
+pub enum Synertek65C02 {}
+/// Marker for the Rockwell 65C02. No WAI/STP.
+pub enum Rockwell65C02 {}
 /// Marker for NES CPU Ricoh 2A03/2A07, with BCD nonsense removed
 pub enum NES {}
 
@@ -189,28 +197,49 @@ impl Flavor for NMOS6502 {
     const JMP_INDIRECT_WRAP_BUG: bool = true;
     const INVALID_ADDR_READ: bool = true;
     const RMW_DUMMY_WRITE: bool = true;
-    const HAS_BRA: bool = false;
-    const HAS_STZ: bool = false;
-    const HAS_WAI_STP: bool = false;
-    const HAS_ROCKWELL_OPS: bool = false;
     const OPCODE_TABLE: OpcodeTable = OpcodeTable::Nmos;
 }
 
-impl Flavor for CMOS65C02 {
+impl Flavor for WDC65C02 {
     type Micro = Micro65C02;
     fn microcode(&self) -> &'static Self::Micro {
         &MICRO_65C02
     }
-    const NAME: &'static str = "CMOS65C02";
+    const NAME: &'static str = "WDC65C02";
     const DECIMAL: DecimalSemantics = DecimalSemantics::Cmos65C02;
+    const DECIMAL_ADC_IMMEDIATE_READ: u32 = 0x007F;
     const JMP_INDIRECT_WRAP_BUG: bool = false; // fixed on CMOS
     const INVALID_ADDR_READ: bool = false;
     const RMW_DUMMY_WRITE: bool = false;
-    const HAS_BRA: bool = true;
-    const HAS_STZ: bool = true;
-    const HAS_WAI_STP: bool = true;
-    const HAS_ROCKWELL_OPS: bool = true;
-    const OPCODE_TABLE: OpcodeTable = OpcodeTable::Cmos;
+    const OPCODE_TABLE: OpcodeTable = OpcodeTable::Wdc65c02;
+}
+
+impl Flavor for Synertek65C02 {
+    type Micro = Micro65C02;
+    fn microcode(&self) -> &'static Self::Micro {
+        &MICRO_65C02
+    }
+    const NAME: &'static str = "Synertek65C02";
+    const DECIMAL: DecimalSemantics = DecimalSemantics::Cmos65C02;
+    const DECIMAL_ADC_IMMEDIATE_READ: u32 = 0x0056;
+    const JMP_INDIRECT_WRAP_BUG: bool = false; // fixed on CMOS
+    const INVALID_ADDR_READ: bool = false;
+    const RMW_DUMMY_WRITE: bool = false;
+    const OPCODE_TABLE: OpcodeTable = OpcodeTable::Synertek;
+}
+
+impl Flavor for Rockwell65C02 {
+    type Micro = Micro65C02;
+    fn microcode(&self) -> &'static Self::Micro {
+        &MICRO_65C02
+    }
+    const NAME: &'static str = "Rockwell65C02";
+    const DECIMAL: DecimalSemantics = DecimalSemantics::Cmos65C02;
+    const DECIMAL_ADC_IMMEDIATE_READ: u32 = 0x0059;
+    const JMP_INDIRECT_WRAP_BUG: bool = false; // fixed on CMOS
+    const INVALID_ADDR_READ: bool = false;
+    const RMW_DUMMY_WRITE: bool = false;
+    const OPCODE_TABLE: OpcodeTable = OpcodeTable::Rockwell;
 }
 
 impl Flavor for NES {
@@ -223,9 +252,5 @@ impl Flavor for NES {
     const JMP_INDIRECT_WRAP_BUG: bool = true;
     const INVALID_ADDR_READ: bool = true;
     const RMW_DUMMY_WRITE: bool = true;
-    const HAS_BRA: bool = false;
-    const HAS_STZ: bool = false;
-    const HAS_WAI_STP: bool = false;
-    const HAS_ROCKWELL_OPS: bool = false;
     const OPCODE_TABLE: OpcodeTable = OpcodeTable::Nmos;
 }

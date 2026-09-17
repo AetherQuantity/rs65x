@@ -178,7 +178,7 @@ macro_rules! define_opcodes {
 
 // this macro also creates the pub enum Mnemonic
 define_opcodes! {
-    tables: [Nmos, Cmos, Wdc816];
+    tables: [Nmos, Synertek, Rockwell, Wdc65c02, Wdc816];
 
     // 6502 Opcodes ///////////////////////////////////////////////////////////////////////////////
 
@@ -197,7 +197,7 @@ define_opcodes! {
         Absolute(Y)         = 0xB9,
         DpIndirect(X)       = 0xA1,
         DpIndirect(Y)       = 0xB1,
-        DpIndirect(None) @[Cmos, Wdc816] = 0xB2,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0xB2,
         StackRelative(None)  @[Wdc816]   = 0xA3,
         StackRelative(Y)     @[Wdc816]   = 0xB3,
         DpIndirectLong(None) @[Wdc816]   = 0xA7,
@@ -246,7 +246,7 @@ define_opcodes! {
         Absolute(Y)      = 0x99,
         DpIndirect(X)    = 0x81,
         DpIndirect(Y)    = 0x91,
-        DpIndirect(None) @[Cmos, Wdc816] = 0x92,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x92,
         StackRelative(None)  @[Wdc816]   = 0x83,
         StackRelative(Y)     @[Wdc816]   = 0x93,
         DpIndirectLong(None) @[Wdc816]   = 0x87,
@@ -356,7 +356,7 @@ define_opcodes! {
         Absolute(Y)         = 0x39,
         DpIndirect(X)       = 0x21,
         DpIndirect(Y)       = 0x31,
-        DpIndirect(None) @[Cmos, Wdc816] = 0x32,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x32,
         StackRelative(None)  @[Wdc816]   = 0x23,
         StackRelative(Y)     @[Wdc816]   = 0x33,
         DpIndirectLong(None) @[Wdc816]   = 0x27,
@@ -379,7 +379,7 @@ define_opcodes! {
         Absolute(Y)         = 0x59,
         DpIndirect(X)       = 0x41,
         DpIndirect(Y)       = 0x51,
-        DpIndirect(None) @[Cmos, Wdc816] = 0x52,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x52,
         StackRelative(None)  @[Wdc816]   = 0x43,
         StackRelative(Y)     @[Wdc816]   = 0x53,
         DpIndirectLong(None) @[Wdc816]   = 0x47,
@@ -402,7 +402,7 @@ define_opcodes! {
         Absolute(Y)         = 0x19,
         DpIndirect(X)       = 0x01,
         DpIndirect(Y)       = 0x11,
-        DpIndirect(None) @[Cmos, Wdc816] = 0x12,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x12,
         StackRelative(None)  @[Wdc816]   = 0x03,
         StackRelative(Y)     @[Wdc816]   = 0x13,
         DpIndirectLong(None) @[Wdc816]   = 0x07,
@@ -422,9 +422,9 @@ define_opcodes! {
     Bit {
         DirectPage(None) = 0x24,
         Absolute(None)   = 0x2C,
-        NoMemory(Immediate) @[Cmos, Wdc816] = 0x89,
-        DirectPage(X)       @[Cmos, Wdc816] = 0x34,
-        Absolute(X)         @[Cmos, Wdc816] = 0x3C,
+        NoMemory(Immediate) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x89,
+        DirectPage(X)       @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x34,
+        Absolute(X)         @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x3C,
     },
 
     /// # Add with Carry
@@ -442,7 +442,7 @@ define_opcodes! {
         Absolute(Y)         = 0x79,
         DpIndirect(X)       = 0x61,
         DpIndirect(Y)       = 0x71,
-        DpIndirect(None) @[Cmos, Wdc816] = 0x72,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x72,
         StackRelative(None)  @[Wdc816]   = 0x63,
         StackRelative(Y)     @[Wdc816]   = 0x73,
         DpIndirectLong(None) @[Wdc816]   = 0x67,
@@ -466,7 +466,7 @@ define_opcodes! {
         Absolute(Y)         = 0xF9,
         DpIndirect(X)       = 0xE1,
         DpIndirect(Y)       = 0xF1,
-        DpIndirect(None) @[Cmos, Wdc816] = 0xF2,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0xF2,
         StackRelative(None)  @[Wdc816]   = 0xE3,
         StackRelative(Y)     @[Wdc816]   = 0xF3,
         DpIndirectLong(None) @[Wdc816]   = 0xE7,
@@ -491,7 +491,7 @@ define_opcodes! {
         Absolute(Y)         = 0xD9,
         DpIndirect(X)       = 0xC1,
         DpIndirect(Y)       = 0xD1,
-        DpIndirect(None) @[Cmos, Wdc816] = 0xD2,
+        DpIndirect(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0xD2,
         StackRelative(None)  @[Wdc816]   = 0xC3,
         StackRelative(Y)     @[Wdc816]   = 0xD3,
         DpIndirectLong(None) @[Wdc816]   = 0xC7,
@@ -537,7 +537,7 @@ define_opcodes! {
         DirectPage(X)    = 0xF6,
         Absolute(None)   = 0xEE,
         Absolute(X)      = 0xFE,
-        NoMemory(Implied) @[Cmos, Wdc816] = 0x1A,
+        NoMemory(Implied) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x1A,
     },
     /// # Increment X Register
     /// Increments the X register by one.
@@ -565,7 +565,7 @@ define_opcodes! {
         DirectPage(X)    = 0xD6,
         Absolute(None)   = 0xCE,
         Absolute(X)      = 0xDE,
-        NoMemory(Implied) @[Cmos, Wdc816] = 0x3A,
+        NoMemory(Implied) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x3A,
     },
     /// # Decrement X Register
     /// Decrements the X register by one.
@@ -652,7 +652,7 @@ define_opcodes! {
     Jmp {
         Jump(JmpAbsolute) = 0x4C,
         Jump(JmpIndirect) = 0x6C,
-        Jump(JmpAbsoluteX) @[Cmos, Wdc816] = 0x7C,
+        Jump(JmpAbsoluteX) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x7C,
     },
     /// # Jump to Subroutine
     /// Pushes the address of the next instruction onto the stack, then sets the program counter to the
@@ -778,14 +778,14 @@ define_opcodes! {
         NoMemory(Immediate) @[Nmos] = 0xC2,
         NoMemory(Immediate) @[Nmos] = 0xE2,
         DirectPage(None) @[Nmos] = 0x04,
-        DirectPage(None) @[Nmos, Cmos] = 0x44,
+        DirectPage(None) @[Nmos, Synertek, Rockwell, Wdc65c02] = 0x44,
         DirectPage(None) @[Nmos] = 0x64,
         DirectPage(X) @[Nmos] = 0x14,
         DirectPage(X) @[Nmos] = 0x34,
-        DirectPage(X) @[Nmos, Cmos] = 0x54,
+        DirectPage(X) @[Nmos, Synertek, Rockwell, Wdc65c02] = 0x54,
         DirectPage(X) @[Nmos] = 0x74,
-        DirectPage(X) @[Nmos, Cmos] = 0xD4,
-        DirectPage(X) @[Nmos, Cmos] = 0xF4,
+        DirectPage(X) @[Nmos, Synertek, Rockwell, Wdc65c02] = 0xD4,
+        DirectPage(X) @[Nmos, Synertek, Rockwell, Wdc65c02] = 0xF4,
         Absolute(None) @[Nmos] = 0x0C,
         Absolute(X) @[Nmos] = 0x1C,
         Absolute(X) @[Nmos] = 0x3C,
@@ -796,49 +796,86 @@ define_opcodes! {
 
         // CMOS cores replace illegal opcodes with NOPs of varying byte lengths
         // and cycle counts
-        CmosNop(1, 1) @[Cmos] = 0x03,
-        CmosNop(1, 1) @[Cmos] = 0x13,
-        CmosNop(1, 1) @[Cmos] = 0x23,
-        CmosNop(1, 1) @[Cmos] = 0x33,
-        CmosNop(1, 1) @[Cmos] = 0x43,
-        CmosNop(1, 1) @[Cmos] = 0x53,
-        CmosNop(1, 1) @[Cmos] = 0x63,
-        CmosNop(1, 1) @[Cmos] = 0x73,
-        CmosNop(1, 1) @[Cmos] = 0x83,
-        CmosNop(1, 1) @[Cmos] = 0x93,
-        CmosNop(1, 1) @[Cmos] = 0xA3,
-        CmosNop(1, 1) @[Cmos] = 0xB3,
-        CmosNop(1, 1) @[Cmos] = 0xC3,
-        CmosNop(1, 1) @[Cmos] = 0xD3,
-        CmosNop(1, 1) @[Cmos] = 0xE3,
-        CmosNop(1, 1) @[Cmos] = 0xF3,
-        CmosNop(1, 1) @[Cmos] = 0x0B,
-        CmosNop(1, 1) @[Cmos] = 0x1B,
-        CmosNop(1, 1) @[Cmos] = 0x2B,
-        CmosNop(1, 1) @[Cmos] = 0x3B,
-        CmosNop(1, 1) @[Cmos] = 0x4B,
-        CmosNop(1, 1) @[Cmos] = 0x5B,
-        CmosNop(1, 1) @[Cmos] = 0x6B,
-        CmosNop(1, 1) @[Cmos] = 0x7B,
-        CmosNop(1, 1) @[Cmos] = 0x8B,
-        CmosNop(1, 1) @[Cmos] = 0x9B,
-        CmosNop(1, 1) @[Cmos] = 0xAB,
-        CmosNop(1, 1) @[Cmos] = 0xBB,
-        CmosNop(1, 1) @[Cmos] = 0xEB,
-        CmosNop(1, 1) @[Cmos] = 0xFB,
-        CmosNop(2, 2) @[Cmos] = 0x02,
-        CmosNop(2, 2) @[Cmos] = 0x22,
-        CmosNop(2, 2) @[Cmos] = 0x42,
-        CmosNop(2, 2) @[Cmos] = 0x62,
-        CmosNop(2, 2) @[Cmos] = 0x82,
-        CmosNop(2, 2) @[Cmos] = 0xC2,
-        CmosNop(2, 2) @[Cmos] = 0xE2,
-        //CmosNop(2, 3) @[Cmos] = 0x44,
-        //CmosNop(2, 4) @[Cmos] = 0x54,
-        //CmosNop(2, 4) @[Cmos] = 0xF4, // this one was on the list twice?
-        CmosNop(3, 4) @[Cmos] = 0xDC,
-        CmosNop(3, 4) @[Cmos] = 0xFC,
-        CmosNop(3, 8) @[Cmos] = 0x5C,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x03,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x13,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x23,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x33,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x43,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x53,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x63,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x73,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x83,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x93,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xA3,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xB3,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xC3,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xD3,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xE3,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xF3,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x0B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x1B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x2B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x3B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x4B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x5B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x6B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x7B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x8B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0x9B,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xAB,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xBB,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xEB,
+        CmosNop(1, 1) @[Synertek, Rockwell, Wdc65c02] = 0xFB,
+        CmosNop(2, 2) @[Synertek, Rockwell, Wdc65c02] = 0x02,
+        CmosNop(2, 2) @[Synertek, Rockwell, Wdc65c02] = 0x22,
+        CmosNop(2, 2) @[Synertek, Rockwell, Wdc65c02] = 0x42,
+        CmosNop(2, 2) @[Synertek, Rockwell, Wdc65c02] = 0x62,
+        CmosNop(2, 2) @[Synertek, Rockwell, Wdc65c02] = 0x82,
+        CmosNop(2, 2) @[Synertek, Rockwell, Wdc65c02] = 0xC2,
+        CmosNop(2, 2) @[Synertek, Rockwell, Wdc65c02] = 0xE2,
+        //CmosNop(2, 3) @[Synertek, Rockwell, Wdc65c02] = 0x44,
+        //CmosNop(2, 4) @[Synertek, Rockwell, Wdc65c02] = 0x54,
+        //CmosNop(2, 4) @[Synertek, Rockwell, Wdc65c02] = 0xF4, // this one was on the list twice?
+        CmosNop(3, 4) @[Synertek, Rockwell, Wdc65c02] = 0xDC,
+        CmosNop(3, 4) @[Synertek, Rockwell, Wdc65c02] = 0xFC,
+        CmosNop(3, 8) @[Wdc65c02] = 0x5C,
+        CmosNop(3, 4) @[Synertek, Rockwell] = 0x5C,
+        NoMemory(Implied) @[Synertek, Rockwell] = 0xCB,
+        DirectPage(X) @[Synertek, Rockwell] = 0xDB,
+
+        // Synertek treats the Rockwell bit-opcode slots as NOPs.
+        DirectPage(None) @[Synertek] = 0x07,
+        CmosNop(3, 3) @[Synertek] = 0x0F,
+        DirectPage(X) @[Synertek] = 0x17,
+        CmosNop(3, 4) @[Synertek] = 0x1F,
+        DirectPage(None) @[Synertek] = 0x27,
+        CmosNop(3, 3) @[Synertek] = 0x2F,
+        DirectPage(X) @[Synertek] = 0x37,
+        CmosNop(3, 4) @[Synertek] = 0x3F,
+        DirectPage(None) @[Synertek] = 0x47,
+        CmosNop(3, 3) @[Synertek] = 0x4F,
+        DirectPage(X) @[Synertek] = 0x57,
+        CmosNop(3, 4) @[Synertek] = 0x5F,
+        DirectPage(None) @[Synertek] = 0x67,
+        CmosNop(3, 3) @[Synertek] = 0x6F,
+        DirectPage(X) @[Synertek] = 0x77,
+        CmosNop(3, 4) @[Synertek] = 0x7F,
+        DirectPage(None) @[Synertek] = 0x87,
+        CmosNop(3, 3) @[Synertek] = 0x8F,
+        DirectPage(X) @[Synertek] = 0x97,
+        CmosNop(3, 4) @[Synertek] = 0x9F,
+        DirectPage(None) @[Synertek] = 0xA7,
+        CmosNop(3, 3) @[Synertek] = 0xAF,
+        DirectPage(X) @[Synertek] = 0xB7,
+        CmosNop(3, 4) @[Synertek] = 0xBF,
+        DirectPage(None) @[Synertek] = 0xC7,
+        CmosNop(3, 3) @[Synertek] = 0xCF,
+        DirectPage(X) @[Synertek] = 0xD7,
+        CmosNop(3, 4) @[Synertek] = 0xDF,
+        DirectPage(None) @[Synertek] = 0xE7,
+        CmosNop(3, 3) @[Synertek] = 0xEF,
+        DirectPage(X) @[Synertek] = 0xF7,
+        CmosNop(3, 4) @[Synertek] = 0xFF,
     },
 
     // Illegal NMOS Opcodes ///////////////////////////////////////////////////////////////////////
@@ -1033,38 +1070,38 @@ define_opcodes! {
     /// Branches to the relative address specified by the signed offset operand.
     ///
     /// Memory access type: None
-    Bra { Branch(Relative) @[Cmos, Wdc816] = 0x80, },
+    Bra { Branch(Relative) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x80, },
 
     /// # Push X Register
     /// Pushes the X register onto the stack.
     ///
     /// Memory access type: Write
-    Phx { Stack @[Cmos, Wdc816] = 0xDA, },
+    Phx { Stack @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0xDA, },
     /// # Push Y Register
     /// Pushes the Y register onto the stack.
     ///
     /// Memory access type: Write
-    Phy { Stack @[Cmos, Wdc816] = 0x5A, },
+    Phy { Stack @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x5A, },
     /// # Pull X Register
     /// Pulls the X register from the stack.
     ///
     /// Memory access type: Read
-    Plx { Stack @[Cmos, Wdc816] = 0xFA, },
+    Plx { Stack @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0xFA, },
     /// # Pull Y Register
     /// Pulls the Y register from the stack.
     ///
     /// Memory access type: Read
-    Ply { Stack @[Cmos, Wdc816] = 0x7A, },
+    Ply { Stack @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x7A, },
 
     /// # Store Zero
     /// Stores zero in memory.
     ///
     /// Memory access type: Write
     Stz {
-        DirectPage(None) @[Cmos, Wdc816] = 0x64,
-        DirectPage(X)    @[Cmos, Wdc816] = 0x74,
-        Absolute(None)   @[Cmos, Wdc816] = 0x9C,
-        Absolute(X)      @[Cmos, Wdc816] = 0x9E,
+        DirectPage(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x64,
+        DirectPage(X)    @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x74,
+        Absolute(None)   @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x9C,
+        Absolute(X)      @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x9E,
     },
     /// # Test and Reset Bits
     /// The Z bit is set to 1 if the AND of the accumulator and memory is zero.
@@ -1076,8 +1113,8 @@ define_opcodes! {
     ///
     /// M = M&~A, Z = (A&M)==0
     Trb {
-        DirectPage(None) @[Cmos, Wdc816] = 0x14,
-        Absolute(None)   @[Cmos, Wdc816] = 0x1C,
+        DirectPage(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x14,
+        Absolute(None)   @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x1C,
     },
     /// # Test and Set Bits
     /// The Z bit is set to 1 if the AND of the accumulator and memory is zero.
@@ -1089,8 +1126,8 @@ define_opcodes! {
     ///
     /// M = M|A, Z = (A&M)==0
     Tsb {
-        DirectPage(None) @[Cmos, Wdc816] = 0x04,
-        Absolute(None)   @[Cmos, Wdc816] = 0x0C,
+        DirectPage(None) @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x04,
+        Absolute(None)   @[Synertek, Rockwell, Wdc65c02, Wdc816] = 0x0C,
     },
 
     /// # Stop the Processor
@@ -1098,7 +1135,7 @@ define_opcodes! {
     /// interrupts or reset signals until the clock input is restored via a hardware reset.
     ///
     /// 65C02 and later only.
-    Stp { NoMemory(Implied) @[Cmos, Wdc816] = 0xDB, },
+    Stp { NoMemory(Implied) @[Wdc65c02, Wdc816] = 0xDB, },
     /// # Wait for Interrupt
     /// Stops the processor until an interrupt occurs. The processor will wait until an interrupt or reset signal
     /// (i.e. IRQ, NMI, RESET). In additiion to reducing power consumption, using WAI also ensures that the interrupt
@@ -1106,138 +1143,138 @@ define_opcodes! {
     /// to finish all instructions before entering WAI.
     ///
     /// 65C02 and later only.
-    Wai { NoMemory(Implied) @[Cmos, Wdc816] = 0xCB, },
+    Wai { NoMemory(Implied) @[Wdc65c02, Wdc816] = 0xCB, },
 
     // R65C02 Opcodes (Rockwell) ////////////////////////////////////////////////////
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr0 { Branch(DpRelative) @[Cmos] = 0x0F, },
+    Bbr0 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x0F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr1 { Branch(DpRelative) @[Cmos] = 0x1F, },
+    Bbr1 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x1F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr2 { Branch(DpRelative) @[Cmos] = 0x2F, },
+    Bbr2 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x2F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr3 { Branch(DpRelative) @[Cmos] = 0x3F, },
+    Bbr3 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x3F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr4 { Branch(DpRelative) @[Cmos] = 0x4F, },
+    Bbr4 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x4F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr5 { Branch(DpRelative) @[Cmos] = 0x5F, },
+    Bbr5 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x5F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr6 { Branch(DpRelative) @[Cmos] = 0x6F, },
+    Bbr6 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x6F, },
     /// # Branch on Bit Reset
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbr7 { Branch(DpRelative) @[Cmos] = 0x7F, },
+    Bbr7 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x7F, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs0 { Branch(DpRelative) @[Cmos] = 0x8F, },
+    Bbs0 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x8F, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs1 { Branch(DpRelative) @[Cmos] = 0x9F, },
+    Bbs1 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0x9F, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs2 { Branch(DpRelative) @[Cmos] = 0xAF, },
+    Bbs2 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0xAF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs3 { Branch(DpRelative) @[Cmos] = 0xBF, },
+    Bbs3 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0xBF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs4 { Branch(DpRelative) @[Cmos] = 0xCF, },
+    Bbs4 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0xCF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs5 { Branch(DpRelative) @[Cmos] = 0xDF, },
+    Bbs5 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0xDF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs6 { Branch(DpRelative) @[Cmos] = 0xEF, },
+    Bbs6 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0xEF, },
     /// # Branch on Bit Set
     /// This instruction has two operands: 1) a zero page address to test the bit of, and 2) a relative offset.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Bbs7 { Branch(DpRelative) @[Cmos] = 0xFF, },
+    Bbs7 { Branch(DpRelative) @[Rockwell, Wdc65c02] = 0xFF, },
 
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb0 { DirectPage(None) @[Cmos] = 0x07, },
+    Rmb0 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x07, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb1 { DirectPage(None) @[Cmos] = 0x17, },
+    Rmb1 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x17, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb2 { DirectPage(None) @[Cmos] = 0x27, },
+    Rmb2 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x27, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb3 { DirectPage(None) @[Cmos] = 0x37, },
+    Rmb3 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x37, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb4 { DirectPage(None) @[Cmos] = 0x47, },
+    Rmb4 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x47, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb5 { DirectPage(None) @[Cmos] = 0x57, },
+    Rmb5 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x57, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb6 { DirectPage(None) @[Cmos] = 0x67, },
+    Rmb6 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x67, },
     /// # Reset Memory Bit
     /// Clear the bit in th zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Rmb7 { DirectPage(None) @[Cmos] = 0x77, },
+    Rmb7 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x77, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb0 { DirectPage(None) @[Cmos] = 0x87, },
+    Smb0 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x87, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb1 { DirectPage(None) @[Cmos] = 0x97, },
+    Smb1 { DirectPage(None) @[Rockwell, Wdc65c02] = 0x97, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb2 { DirectPage(None) @[Cmos] = 0xA7, },
+    Smb2 { DirectPage(None) @[Rockwell, Wdc65c02] = 0xA7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb3 { DirectPage(None) @[Cmos] = 0xB7, },
+    Smb3 { DirectPage(None) @[Rockwell, Wdc65c02] = 0xB7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb4 { DirectPage(None) @[Cmos] = 0xC7, },
+    Smb4 { DirectPage(None) @[Rockwell, Wdc65c02] = 0xC7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb5 { DirectPage(None) @[Cmos] = 0xD7, },
+    Smb5 { DirectPage(None) @[Rockwell, Wdc65c02] = 0xD7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb6 { DirectPage(None) @[Cmos] = 0xE7, },
+    Smb6 { DirectPage(None) @[Rockwell, Wdc65c02] = 0xE7, },
     /// # Set Memory Bit
     /// Set the bit in the zero page memory location specified in the operand.
     /// This instruction is ONLY available on the R65C02 (not the 16-bit cpus).
-    Smb7 { DirectPage(None) @[Cmos] = 0xF7, },
+    Smb7 { DirectPage(None) @[Rockwell, Wdc65c02] = 0xF7, },
 
     // 65C816 Opcodes /////////////////////////////////////////////////////////////////////////////
     // TODO

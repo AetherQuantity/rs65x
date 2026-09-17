@@ -1,50 +1,47 @@
-use crate::common::data::TestData;
 use rs65x::{
-    cpu6502::{Cpu6502, flavor::CMOS65C02},
-    isa::table::{Instruction, OpcodeTable},
+    cpu6502::{Cpu6502, flavor::Flavor},
+    isa::table::Instruction,
 };
 
-use crate::common::init_logger;
-use crate::common::setup::{Access, Harness, State};
+use super::{
+    data::TestData,
+    init_logger,
+    setup::{Access, Harness, State},
+};
 
-#[test]
-fn run_all() {
+pub fn run_suite<F: Flavor>(suite: &str, opcodes: impl IntoIterator<Item = u8>) {
     init_logger(log::LevelFilter::Warn);
-    let mut data = TestData::open("wdc65c02").unwrap_or_else(|err| panic!("{err}"));
-    for op in 0x00..=0xFF {
-        let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
-        println!(
-            "Starting [{op:02X}] {}, {}",
-            inst.mnemonic, inst.address_mode,
-        );
-        run_opcode(&mut data, op, false).unwrap_or_else(|err| panic!("{err}"));
+    let mut data = TestData::open(suite).unwrap_or_else(|err| panic!("{err}"));
+    for op in opcodes {
+        print_opcode::<F>(op);
+        run_opcode::<F>(&mut data, op, false).unwrap_or_else(|err| panic!("{err}"));
     }
 }
 
-#[test]
-fn run_single() {
+pub fn run_single<F: Flavor>(suite: &str, op: u8) {
     init_logger(log::LevelFilter::Warn);
-    let mut data = TestData::open("wdc65c02").unwrap_or_else(|err| panic!("{err}"));
-    let op = 0xEB;
-    let inst = Instruction::from_byte(op, OpcodeTable::Cmos);
+    let mut data = TestData::open(suite).unwrap_or_else(|err| panic!("{err}"));
+    print_opcode::<F>(op);
+    run_opcode::<F>(&mut data, op, true).unwrap_or_else(|err| panic!("{err}"));
+}
+
+fn print_opcode<F: Flavor>(op: u8) {
+    let inst = Instruction::from_byte(op, F::OPCODE_TABLE);
     println!(
-        "Starting [{op:02X}] {}, {}",
-        inst.mnemonic, inst.address_mode,
+        "Starting {} [{op:02X}] {}, {}",
+        F::NAME,
+        inst.mnemonic,
+        inst.address_mode
     );
-    run_opcode(&mut data, op, true).unwrap_or_else(|err| panic!("{err}"));
 }
 
-fn run_opcode(data: &mut TestData, op: u8, debug: bool) -> Result<(), String> {
-    if op == 0xCB || op == 0xDB {
-        println!("TODO: CMOS WAI and STP not tested yet!");
-        return Ok(());
-    }
+fn run_opcode<F: Flavor>(data: &mut TestData, op: u8, debug: bool) -> Result<(), String> {
     let tests = data.load(op)?;
     for test in &tests {
         if debug {
             println!("TEST CASE BEGIN: \"{}\"", test.name);
         }
-        let (mut cpu, mut bus) = setup_initial(&test.initial);
+        let (mut cpu, mut bus) = setup_initial::<F>(&test.initial);
         bus.debug_print = debug;
         for cycle in &test.cycles {
             cpu.step(&mut bus);
@@ -58,8 +55,8 @@ fn run_opcode(data: &mut TestData, op: u8, debug: bool) -> Result<(), String> {
     Ok(())
 }
 
-pub fn setup_initial(initial: &State) -> (Cpu6502<CMOS65C02, Harness>, Harness) {
-    let mut cpu = Cpu6502::<CMOS65C02, Harness>::new();
+pub fn setup_initial<F: Flavor>(initial: &State) -> (Cpu6502<F, Harness>, Harness) {
+    let mut cpu = Cpu6502::<F, Harness>::new();
     cpu.pc = initial.pc;
     cpu.a = initial.a;
     cpu.s = initial.s;
@@ -101,7 +98,7 @@ pub fn assert_cycle(expected: &Access, actual: &Access) {
     );
 }
 
-pub fn assert_final(cpu: &Cpu6502<CMOS65C02, Harness>, bus: &Harness, fin: &State) {
+pub fn assert_final<F: Flavor>(cpu: &Cpu6502<F, Harness>, bus: &Harness, fin: &State) {
     assert!(
         cpu.pc == fin.pc,
         "PC mismatch: Expected {:04X}, Actual {:04X}",

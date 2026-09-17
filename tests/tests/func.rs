@@ -5,7 +5,7 @@ use rs65x::{
     FastMapBus,
     cpu6502::{
         Cpu6502,
-        flavor::{CMOS65C02, NMOS6502},
+        flavor::{NMOS6502, WDC65C02},
     },
 };
 
@@ -43,7 +43,7 @@ fn functional_tests() {
 #[test]
 fn extended_opcode_tests() {
     let mut bus = FastMapBus::new();
-    let mut cpu: Cpu6502<CMOS65C02, FastMapBus<16, 12>> = Cpu6502::new();
+    let mut cpu: Cpu6502<WDC65C02, FastMapBus<16, 12>> = Cpu6502::new();
 
     let mut f = File::open("tests/data/func_tests/65C02_extended_opcodes_test.bin").unwrap();
     let mut buf = Vec::new();

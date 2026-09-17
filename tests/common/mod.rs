@@ -1,5 +1,6 @@
 pub mod data;
 pub mod setup;
+pub mod single_step;
 
 pub fn init_logger(lv: log::LevelFilter) {
     let mut log_builder = env_logger::Builder::from_default_env();
